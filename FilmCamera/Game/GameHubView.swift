@@ -8,7 +8,7 @@ struct GameHubView: View {
     @State private var playing: Game?
 
     enum Game: String, Identifiable {
-        case jewel, candy, romance, chameleon, hakoniwa, civ, mart
+        case jewel, candy, romance, chameleon, hakoniwa, civ, mart, puni
         var id: String { rawValue }
     }
 
@@ -20,6 +20,8 @@ struct GameHubView: View {
                 Text("ひみつのゲーム")
                     .font(.title2.weight(.heavy))
                     .padding(.top, 40)
+                gameButton(title: "ぷにぷにシューター", subtitle: "ぷにぷにの玉を撃って、同じ色をくっつけて大きくしよう",
+                           systemImage: "circle.hexagongrid.fill", colors: [.pink, .orange]) { playing = .puni }
                 gameButton(title: "まちかどマート", subtitle: "商品を運んで棚に並べ、レジでお会計。お店を大きくしよう",
                            systemImage: "cart.fill", colors: [.yellow, .orange]) { playing = .mart }
                 gameButton(title: "ジュエル塗り絵", subtitle: "宝石を並べ替えて絵を完成させる",
@@ -50,6 +52,7 @@ struct GameHubView: View {
             case .hakoniwa: HakoniwaGameView()
             case .civ: CivGameView()
             case .mart: MartGameView()
+            case .puni: PuniGameView()
             }
         }
     }
