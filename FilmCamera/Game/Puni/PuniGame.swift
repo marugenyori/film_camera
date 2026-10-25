@@ -1,405 +1,482 @@
 import SwiftUI
 import UIKit
+import simd
 
-/// 「ぷにぷにシューター」のルールと物理。
-/// びんの上の発射台から、ぷにぷにの玉をねらって撃つ。同じ色（同じ大きさ）の玉がさわるとくっついて、ひとつ大きな玉になる。
-/// いちばん大きな玉どうしがくっつくと、はじけて大きな得点。玉が赤い線より上に 3 秒いると終わり。
-/// 玉は円として動かすが、押し合うと少し重なるようにして、重なったぶん描くときにへこませる（ぷにっとつぶれて見える）
+/// 「ぷにぷにシューター」のルールと物理（Steam の sobosuba を手本にした、数字の玉をくっつけるゲーム）。
+/// 黒い容器（下の角が斜め、左右の壁に半円の出っぱり）に、上の列から数字の玉（1, 2, 4, 8…）を撃ちこむ。
+/// 同じ数字の玉がさわるとくっついて 2 倍の玉になる。点数は容器の中の数字の合計。玉が上の線をこえて 3 秒たつと終わり。
+/// 玉は「やわらかい体」：まわりの点をばねでつなぎ、中の面積を保とうとする力（圧力）でふくらませる。
+/// 押されるとすき間に合わせて形が変わり、ぎゅうぎゅうに詰まる
 @MainActor
 final class PuniGame: ObservableObject {
+    typealias Vec = SIMD2<Float>
+
     struct Blob: Identifiable {
         let id: Int
         var level: Int
-        var pos: CGPoint
-        var vel: CGVector = .zero
-        /// いまの半径（くっついて生まれたときは少し小さく、すぐ本来の大きさへふくらむ）
-        var radius: CGFloat
-        /// ぷるぷる（ばねで揺れる。押されたり当たったりすると大きくなる）
-        var squash: CGFloat = 0
-        var squashVel: CGFloat = 0
-        var squashAngle: CGFloat = 0
-        /// 押し合っている向きと深さ（描くときにへこませる）
-        var contacts: [(angle: CGFloat, depth: CGFloat)] = []
+        var pos: [Vec]
+        var prev: [Vec]
+        /// いまめざしている面積（くっついた直後は 2 つ分から、本来の大きさへ少しずつ縮む）
+        var area: Float
+        var targetArea: Float
         var age: Double = 0
-        /// 撃ったばかり（まだ何にもさわっていない）。赤い線を通っても数えない
-        var fresh = true
-        /// まばたきの時計
-        var blink: Double = .random(in: 0...4)
+        var minX: Float = 0, maxX: Float = 0, minY: Float = 0, maxY: Float = 0
+
+        var value: Int { 1 << level }
+
+        var center: Vec {
+            var sum = Vec(0, 0)
+            for p in pos { sum += p }
+            return sum / Float(pos.count)
+        }
+
+        /// いまの面積（点の順は時計回りの逆、y は下向き）
+        var currentArea: Float {
+            var total: Float = 0
+            let count = pos.count
+            for index in 0..<count {
+                let a = pos[index], b = pos[(index + 1) % count]
+                total += a.x * b.y - b.x * a.y
+            }
+            return total * 0.5
+        }
+
+        mutating func updateBounds() {
+            var lowX = Float.infinity, highX = -Float.infinity, lowY = Float.infinity, highY = -Float.infinity
+            for p in pos {
+                lowX = min(lowX, p.x)
+                highX = max(highX, p.x)
+                lowY = min(lowY, p.y)
+                highY = max(highY, p.y)
+            }
+            minX = lowX
+            maxX = highX
+            minY = lowY
+            maxY = highY
+        }
+
+        /// 点が中にあるか
+        func contains(_ point: Vec) -> Bool {
+            guard point.x >= minX, point.x <= maxX, point.y >= minY, point.y <= maxY else { return false }
+            var inside = false
+            var j = pos.count - 1
+            for i in 0..<pos.count {
+                let a = pos[i], b = pos[j]
+                if (a.y > point.y) != (b.y > point.y), point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x {
+                    inside.toggle()
+                }
+                j = i
+            }
+            return inside
+        }
     }
 
-    struct Particle: Identifiable {
+    struct Popup: Identifiable, Equatable {
         let id: Int
-        var pos: CGPoint
-        var vel: CGVector
-        var life: Double
-        var size: CGFloat
-        var color: Color
+        let text: String
     }
 
-    struct Floater: Identifiable {
-        let id: Int
-        var pos: CGPoint
-        var text: String
-        var life: Double
-        var big: Bool
-    }
-
-    /// 玉の段階（0 がいちばん小さい）
-    static let levels = 11
-    /// 段階ごとの半径（びんの幅 360 のとき）
-    static let radii: [CGFloat] = [14, 19, 25, 31, 38, 46, 55, 65, 76, 88, 100]
+    /// 数字ごとの色（1 赤・2 黄・4 緑・8 青緑・16 青・32 紫・64 ピンク・128 橙・256 黄緑・512 白・1024 水色・2048 濃い青・4096 赤紫）
     static let colors: [Color] = [
-        Color(red: 1.0, green: 0.55, blue: 0.62), Color(red: 1.0, green: 0.72, blue: 0.35), Color(red: 1.0, green: 0.86, blue: 0.3),
-        Color(red: 0.62, green: 0.88, blue: 0.4), Color(red: 0.35, green: 0.82, blue: 0.7), Color(red: 0.4, green: 0.7, blue: 1.0),
-        Color(red: 0.58, green: 0.55, blue: 1.0), Color(red: 0.82, green: 0.5, blue: 0.95), Color(red: 1.0, green: 0.5, blue: 0.82),
-        Color(red: 0.98, green: 0.42, blue: 0.4), Color(red: 1.0, green: 0.78, blue: 0.25),
+        Color(red: 1, green: 0.2, blue: 0.2), Color(red: 1, green: 0.92, blue: 0.2), Color(red: 0.37, green: 1, blue: 0.2),
+        Color(red: 0.2, green: 1, blue: 0.75), Color(red: 0.2, green: 0.53, blue: 1), Color(red: 0.6, green: 0.2, blue: 1),
+        Color(red: 1, green: 0.2, blue: 0.68), Color(red: 1, green: 0.45, blue: 0.2), Color(red: 0.85, green: 1, blue: 0.2),
+        Color(white: 0.93), Color(red: 0.2, green: 1, blue: 1), Color(red: 0.2, green: 0.27, blue: 1),
+        Color(red: 0.83, green: 0.2, blue: 1), Color(red: 1, green: 0.35, blue: 0.35), Color(red: 1, green: 0.8, blue: 0.2),
     ]
+
+    static func color(_ level: Int) -> Color { colors[min(max(level, 0), colors.count - 1)] }
 
     @Published private(set) var frame = 0
     @Published private(set) var score = 0
-    @Published private(set) var best = UserDefaults.standard.integer(forKey: "puniBest")
+    @Published private(set) var best = UserDefaults.standard.integer(forKey: "puniBest2")
     @Published private(set) var gameOver = false
-    /// いちばん大きくなった段階
-    @Published private(set) var maxLevel = 0
-    /// 発射台にのっている玉と、その次の玉
-    @Published private(set) var current = 0
-    @Published private(set) var next = 1
+    /// 上の列（先頭が次に撃つ玉）
+    @Published private(set) var queue: [Int] = []
+    @Published var popup: Popup?
 
     private(set) var blobs: [Blob] = []
-    private(set) var particles: [Particle] = []
-    private(set) var floaters: [Floater] = []
-    /// びんの大きさ（画面に合わせて決める）
-    private(set) var size = CGSize(width: 360, height: 500)
-    /// 赤い線（これより上に 3 秒いると終わり）の高さ
-    var dangerY: CGFloat { size.height * 0.17 }
-    /// 発射台の場所
-    var launcher: CGPoint { CGPoint(x: size.width / 2, y: size.height * 0.07) }
-    /// 赤い線を越えている時間（0〜3）
+    /// 容器の中の大きさ（画面に合わせて決める）
+    private(set) var width: Float = 340
+    private(set) var height: Float = 360
+    /// 上の線の危なさ（0〜1）
     private(set) var danger: Double = 0
-    /// 画面のゆれ
-    private(set) var shake: CGFloat = 0
-    private var cooldown: Double = 0
-    private var combo = 0
-    private var comboTimer: Double = 0
     private var nextID = 0
     private var accumulator: Double = 0
+    private var biggest = 0
+    private var achieved: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "puniAchievements") ?? [])
     private let haptic = UIImpactFeedbackGenerator(style: .soft)
-    private let heavyHaptic = UIImpactFeedbackGenerator(style: .heavy)
 
     init() {
-        current = Int.random(in: 0...1)
-        next = Int.random(in: 0...2)
+        refillQueue()
     }
 
-    var scale: CGFloat { size.width / 360 }
+    // MARK: - 形と大きさ
 
-    func radius(_ level: Int) -> CGFloat { Self.radii[min(max(level, 0), Self.levels - 1)] * scale }
+    /// 次の玉が並ぶ高さ・撃ち出す高さ
+    var queueY: Float { height * 0.12 }
+    /// これより上に玉が積み上がると危ない
+    var dangerY: Float { height * 0.2 }
+    /// 下の角を斜めに切る大きさ
+    var chamfer: Float { width * 0.1 }
+    /// 左右の壁の半円の出っぱり
+    var bumperY: Float { height * 0.33 }
+    var bumperRadius: Float { width * 0.065 }
 
-    /// 画面の大きさに合わせて、びんの大きさを決める（玉の位置も一緒に伸び縮みさせる）
-    func layout(_ newSize: CGSize) {
-        guard newSize.width > 50, abs(newSize.width - size.width) > 0.5 || abs(newSize.height - size.height) > 0.5 else { return }
-        let sx = newSize.width / size.width, sy = newSize.height / size.height
+    /// 数字の玉の半径（面積は数字の 0.42 乗に比例して大きくなる）
+    func radius(_ level: Int) -> Float { width * 0.046 * pow(2, Float(level) * 0.209) }
+    func area(_ level: Int) -> Float { let r = radius(level); return .pi * r * r }
+    /// まわりの点の数（大きい玉ほど多い）
+    func pointCount(_ level: Int) -> Int { min(max(Int(radius(level) * 2 * .pi / (width * 0.032)), 10), 30) }
+
+    func layout(width newWidth: Float, height newHeight: Float) {
+        guard newWidth > 50, abs(newWidth - width) > 0.5 || abs(newHeight - height) > 0.5 else { return }
+        let sx = newWidth / width, sy = newHeight / height
         for index in blobs.indices {
-            blobs[index].pos.x *= sx
-            blobs[index].pos.y *= sy
-            blobs[index].radius *= sx
+            for p in blobs[index].pos.indices {
+                blobs[index].pos[p] *= Vec(sx, sy)
+                blobs[index].prev[p] *= Vec(sx, sy)
+            }
+            blobs[index].area *= sx * sx
+            blobs[index].targetArea *= sx * sx
         }
-        size = newSize
+        width = newWidth
+        height = newHeight
     }
 
     func restart() {
         blobs = []
-        particles = []
-        floaters = []
+        queue = []
+        refillQueue()
         score = 0
-        maxLevel = 0
+        biggest = 0
         danger = 0
-        combo = 0
         gameOver = false
-        current = Int.random(in: 0...1)
-        next = Int.random(in: 0...2)
         frame += 1
+    }
+
+    /// 上の列を 4 つまで埋める。いちばん大きな玉に合わせて、ときどき大きめの玉も混ぜる
+    private func refillQueue() {
+        while queue.count < 4 {
+            let top = max(1, min(6, biggest - 4))
+            var level = Int.random(in: 0...top)
+            if Int.random(in: 0..<2) == 0 { level = min(level, Int.random(in: 0...2)) }
+            queue.append(level)
+        }
     }
 
     // MARK: - 撃つ
 
-    /// 指の場所へ向けた、撃つ速さ（向きは発射台から指へ。上向きには撃てない）
-    func shotVelocity(toward point: CGPoint) -> CGVector? {
-        let dx = point.x - launcher.x, dy = point.y - launcher.y
-        let length = hypot(dx, dy)
-        guard length > 12, dy > -length * 0.25 else { return nil }
-        let speed = min(max(length * 3.2, 380), 1250) * scale
-        return CGVector(dx: dx / length * speed, dy: dy / length * speed)
-    }
+    /// 上の列の並び：玉ごとの中心と幅（細い筒につまっているように、横に長くつぶれて並ぶ）
+    var queueHeight: Float { width * 0.085 }
 
-    /// 撃ったあとの道すじ（ねらいの点線。ほかの玉は気にしない）
-    func trajectory(toward point: CGPoint) -> [CGPoint] {
-        guard let velocity = shotVelocity(toward: point) else { return [] }
-        var pos = launcher, vel = velocity
-        var points: [CGPoint] = []
-        let r = radius(current)
-        for _ in 0..<26 {
-            for _ in 0..<4 {
-                let dt = 1.0 / 120
-                vel.dy += gravity * dt
-                pos.x += vel.dx * dt
-                pos.y += vel.dy * dt
-                if pos.x < r { pos.x = r; vel.dx = -vel.dx * 0.4 }
-                if pos.x > size.width - r { pos.x = size.width - r; vel.dx = -vel.dx * 0.4 }
-            }
-            if pos.y > size.height - r { break }
-            points.append(pos)
+    func queueLayout() -> [(level: Int, x: Float, width: Float)] {
+        let h = queueHeight
+        var x = width * 0.3
+        var result: [(level: Int, x: Float, width: Float)] = []
+        for (index, level) in queue.enumerated() {
+            let w = min(max(h, area(level) / h * 0.75), width * 0.34)
+            if index == 0 { x -= w / 2 }
+            result.append((level, x + w / 2, w))
+            x += w + 3
         }
-        return points
+        return result
     }
 
-    func shoot(toward point: CGPoint) {
-        guard !gameOver, cooldown <= 0, let velocity = shotVelocity(toward: point) else { return }
-        var blob = Blob(id: makeID(), level: current, pos: launcher, radius: radius(current))
-        blob.vel = velocity
-        blob.squash = 0.18
-        blob.squashAngle = atan2(velocity.dy, velocity.dx)
+    /// 撃つ場所（列の先頭の玉の中心）
+    var launchPoint: Vec { Vec(queueLayout().first?.x ?? width * 0.3, queueY) }
+
+    /// 引っぱった長さと向きから、撃つ速さ（短いとそっと、長いと強く）
+    func launchVelocity(drag: Vec) -> Vec {
+        let length = simd_length(drag)
+        guard length > 6 else { return Vec(0, 0) }
+        let speed = min(length * 6, width * 3.2)
+        return drag / length * speed
+    }
+
+    func shoot(drag: Vec) {
+        guard !gameOver, let level = queue.first else { return }
+        let center = launchPoint
+        queue.removeFirst()
+        var blob = makeBlob(level: level, center: center)
+        let velocity = launchVelocity(drag: drag)
+        let step = Float(1.0 / 240)
+        for index in blob.prev.indices { blob.prev[index] = blob.pos[index] - velocity * step }
         blobs.append(blob)
-        current = next
-        // 次の玉：いままで作った大きさに合わせて、小さめの玉からえらぶ
-        let top = min(4, max(1, maxLevel - 1))
-        next = Int.random(in: 0...top)
-        if Int.random(in: 0..<3) == 0 { next = min(next, 1) }
-        cooldown = 0.45
+        refillQueue()
         GameAudio.shared.play(.tap)
+    }
+
+    private func makeBlob(level: Int, center: Vec) -> Blob {
+        let count = pointCount(level)
+        let r = radius(level)
+        var points: [Vec] = []
+        for index in 0..<count {
+            let angle = Float(index) / Float(count) * 2 * .pi
+            points.append(center + Vec(cos(angle), sin(angle)) * r)
+        }
+        nextID += 1
+        var blob = Blob(id: nextID, level: level, pos: points, prev: points, area: area(level), targetArea: area(level))
+        blob.updateBounds()
+        return blob
     }
 
     // MARK: - 毎コマ
 
-    private var gravity: CGFloat { 1500 * scale }
-
     func step(_ dt: Double) {
         guard !gameOver else { return }
-        cooldown -= dt
-        comboTimer -= dt
-        if comboTimer <= 0 { combo = 0 }
         accumulator += dt
-        // 決まった細かさで動かす（重なり方がコマの長さで変わらないように）
         let tick = 1.0 / 240
         var steps = 0
-        while accumulator >= tick, steps < 12 {
-            physics(tick)
+        while accumulator >= tick, steps < 8 {
+            physics(Float(tick))
             accumulator -= tick
             steps += 1
         }
-        if steps == 12 { accumulator = 0 }
-        animate(dt)
+        if steps == 8 { accumulator = 0 }
+        for index in blobs.indices {
+            blobs[index].age += dt
+            // くっついた直後の大きさから、本来の大きさへ
+            blobs[index].area += (blobs[index].targetArea - blobs[index].area) * Float(min(1, dt * 3))
+        }
         checkDanger(dt)
+        let total = blobs.reduce(0) { $0 + $1.value }
+        if total != score {
+            score = total
+            if score > best {
+                best = score
+                UserDefaults.standard.set(best, forKey: "puniBest2")
+            }
+        }
         frame &+= 1
     }
 
-    private func physics(_ dt: Double) {
-        let g = gravity
-        for index in blobs.indices {
-            blobs[index].vel.dy += g * dt
-            blobs[index].vel.dx *= 0.9995
-            blobs[index].pos.x += blobs[index].vel.dx * dt
-            blobs[index].pos.y += blobs[index].vel.dy * dt
-            blobs[index].contacts.removeAll(keepingCapacity: true)
-        }
-        // びんの壁と底
-        for index in blobs.indices {
-            let r = blobs[index].radius
-            if blobs[index].pos.x < r {
-                bump(index, impact: abs(blobs[index].vel.dx), angle: .pi)
-                blobs[index].pos.x = r
-                blobs[index].vel.dx = abs(blobs[index].vel.dx) * 0.3
-            }
-            if blobs[index].pos.x > size.width - r {
-                bump(index, impact: abs(blobs[index].vel.dx), angle: 0)
-                blobs[index].pos.x = size.width - r
-                blobs[index].vel.dx = -abs(blobs[index].vel.dx) * 0.3
-            }
-            if blobs[index].pos.y > size.height - r {
-                bump(index, impact: abs(blobs[index].vel.dy), angle: .pi / 2)
-                blobs[index].pos.y = size.height - r
-                blobs[index].vel.dy = -abs(blobs[index].vel.dy) * 0.2
-                blobs[index].vel.dx *= 0.98
-                blobs[index].fresh = false
-                blobs[index].contacts.append((.pi / 2, 0))
+    private func physics(_ dt: Float) {
+        let gravity = Vec(0, width * 2.6) * dt * dt
+        // 前の動きを引きつぎ（少し弱めて）、重力で落とす
+        for b in blobs.indices {
+            for i in blobs[b].pos.indices {
+                let p = blobs[b].pos[i]
+                let velocity = (p - blobs[b].prev[i]) * 0.99
+                blobs[b].prev[i] = p
+                blobs[b].pos[i] = p + velocity + gravity
             }
         }
-        // 玉どうし：やわらかく押し返す（少し重なったままにして、ぷにっと見せる）
-        var merges: [(Int, Int)] = []
-        var merging = Set<Int>()
-        let count = blobs.count
-        for i in 0..<count {
-            for j in (i + 1)..<count {
-                let dx = blobs[j].pos.x - blobs[i].pos.x, dy = blobs[j].pos.y - blobs[i].pos.y
-                let minDistance = blobs[i].radius + blobs[j].radius
-                let distanceSquared = dx * dx + dy * dy
-                guard distanceSquared < minDistance * minDistance else { continue }
-                let distance = max(sqrt(distanceSquared), 0.001)
-                let nx = dx / distance, ny = dy / distance
-                let overlap = minDistance - distance
-                // 同じ段階どうしはくっつく
-                if blobs[i].level == blobs[j].level, !merging.contains(i), !merging.contains(j), blobs[i].age > 0.05, blobs[j].age > 0.05 {
-                    merges.append((i, j))
-                    merging.insert(i)
-                    merging.insert(j)
-                    continue
-                }
-                let mi = blobs[i].radius * blobs[i].radius, mj = blobs[j].radius * blobs[j].radius
-                let total = mi + mj
-                // 重なりの 3 割ずつ押しもどす（残りがへこみになる）
-                let push = overlap * 0.3
-                blobs[i].pos.x -= nx * push * mj / total
-                blobs[i].pos.y -= ny * push * mj / total
-                blobs[j].pos.x += nx * push * mi / total
-                blobs[j].pos.y += ny * push * mi / total
-                // 近づく速さを打ち消し、少しはね返す
-                let rvx = blobs[j].vel.dx - blobs[i].vel.dx, rvy = blobs[j].vel.dy - blobs[i].vel.dy
-                let along = rvx * nx + rvy * ny
-                if along < 0 {
-                    let impulse = -(1 + 0.12) * along / (1 / mi + 1 / mj)
-                    blobs[i].vel.dx -= impulse / mi * nx
-                    blobs[i].vel.dy -= impulse / mi * ny
-                    blobs[j].vel.dx += impulse / mj * nx
-                    blobs[j].vel.dy += impulse / mj * ny
-                    // 横すべりを少しおさえる（積み上がるように）
-                    let tx = -ny, ty = nx
-                    let slide = rvx * tx + rvy * ty
-                    let friction = slide * 0.04
-                    blobs[i].vel.dx += friction * tx * mj / total
-                    blobs[i].vel.dy += friction * ty * mj / total
-                    blobs[j].vel.dx -= friction * tx * mi / total
-                    blobs[j].vel.dy -= friction * ty * mi / total
-                    if -along > 120 * scale {
-                        bump(i, impact: -along * 0.5, angle: atan2(ny, nx))
-                        bump(j, impact: -along * 0.5, angle: atan2(-ny, -nx))
-                    }
-                }
-                let depth = overlap * 0.5
-                blobs[i].contacts.append((atan2(ny, nx), depth))
-                blobs[j].contacts.append((atan2(-ny, -nx), depth))
-                blobs[i].fresh = false
-                blobs[j].fresh = false
-            }
+        var touching: [(Int, Int)] = []
+        for iteration in 0..<3 {
+            for b in blobs.indices { keepShape(b) }
+            for b in blobs.indices { blobs[b].updateBounds() }
+            let pairs = collide(record: iteration == 2)
+            if iteration == 2 { touching = pairs }
+            for b in blobs.indices { walls(b) }
         }
-        if !merges.isEmpty { merge(merges) }
+        if !touching.isEmpty { merge(touching) }
     }
 
-    /// 当たったときのぷるん
-    private func bump(_ index: Int, impact: CGFloat, angle: CGFloat) {
-        let amount = min(impact / (1400 * scale), 0.28)
-        guard amount > 0.02 else { return }
-        if amount > abs(blobs[index].squash) {
-            blobs[index].squash = amount
-            blobs[index].squashAngle = angle
+    /// まわりのばね（となり・ひとつ飛ばし）と、面積を保つ圧力
+    private func keepShape(_ b: Int) {
+        let count = blobs[b].pos.count
+        let radius = sqrt(blobs[b].area / .pi)
+        let edge = 2 * radius * sin(.pi / Float(count))
+        let skip = 2 * radius * sin(2 * .pi / Float(count))
+        for i in 0..<count {
+            let j = (i + 1) % count
+            let delta = blobs[b].pos[j] - blobs[b].pos[i]
+            let length = max(simd_length(delta), 0.0001)
+            let correction = delta * ((length - edge) / length * 0.5 * 0.9)
+            blobs[b].pos[i] += correction
+            blobs[b].pos[j] -= correction
+            let k = (i + 2) % count
+            let delta2 = blobs[b].pos[k] - blobs[b].pos[i]
+            let length2 = max(simd_length(delta2), 0.0001)
+            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.08)
+            blobs[b].pos[i] += correction2
+            blobs[b].pos[k] -= correction2
+        }
+        // 圧力：面積の差を、各点の「面積を増やす向き」に分ける
+        let current = blobs[b].currentArea
+        var gradients: [Vec] = []
+        gradients.reserveCapacity(count)
+        var sum: Float = 0
+        for i in 0..<count {
+            let before = blobs[b].pos[(i + count - 1) % count], after = blobs[b].pos[(i + 1) % count]
+            let gradient = Vec(after.y - before.y, before.x - after.x) * 0.5
+            gradients.append(gradient)
+            sum += simd_length_squared(gradient)
+        }
+        guard sum > 0.0001 else { return }
+        let lambda = (blobs[b].area - current) / sum * 0.9
+        for i in 0..<count { blobs[b].pos[i] += gradients[i] * lambda }
+    }
+
+    /// 玉どうし：相手の中に入った点を、相手のいちばん近いふちまで押しもどす（相手のふちも半分押す）
+    private func collide(record: Bool) -> [(Int, Int)] {
+        var list: [(Int, Int)] = []
+        let count = blobs.count
+        for a in 0..<count {
+            for b in (a + 1)..<count {
+                guard blobs[a].maxX >= blobs[b].minX, blobs[b].maxX >= blobs[a].minX,
+                      blobs[a].maxY >= blobs[b].minY, blobs[b].maxY >= blobs[a].minY else { continue }
+                let hitA = push(points: a, into: b)
+                let hitB = push(points: b, into: a)
+                if record, hitA || hitB, blobs[a].level == blobs[b].level, blobs[a].age > 0.15, blobs[b].age > 0.15 {
+                    list.append((a, b))
+                }
+            }
+        }
+        return list
+    }
+
+    @discardableResult
+    private func push(points a: Int, into b: Int) -> Bool {
+        var hit = false
+        let countB = blobs[b].pos.count
+        for i in blobs[a].pos.indices {
+            let p = blobs[a].pos[i]
+            guard blobs[b].contains(p) else { continue }
+            hit = true
+            // いちばん近いふち
+            var bestDistance = Float.infinity
+            var bestEdge = 0
+            var bestT: Float = 0
+            var bestPoint = p
+            for j in 0..<countB {
+                let e0 = blobs[b].pos[j], e1 = blobs[b].pos[(j + 1) % countB]
+                let edge = e1 - e0
+                let t = min(max(simd_dot(p - e0, edge) / max(simd_length_squared(edge), 0.0001), 0), 1)
+                let q = e0 + edge * t
+                let distance = simd_length_squared(q - p)
+                if distance < bestDistance {
+                    bestDistance = distance
+                    bestEdge = j
+                    bestT = t
+                    bestPoint = q
+                }
+            }
+            var move = bestPoint - p
+            let length = simd_length(move)
+            // 一度に大きく動かしすぎない（はじけ飛ばないように）
+            let limit = width * 0.03
+            if length > limit { move *= limit / length }
+            blobs[a].pos[i] += move * 0.5
+            // 押されている点は少しすべりにくく（止まったあとにぷるぷる震え続けないように）
+            let previous = blobs[a].prev[i]
+            blobs[a].prev[i] = previous + (blobs[a].pos[i] - previous) * 0.2
+            let next = (bestEdge + 1) % countB
+            blobs[b].pos[bestEdge] -= move * 0.5 * (1 - bestT)
+            blobs[b].pos[next] -= move * 0.5 * bestT
+        }
+        if hit { blobs[b].updateBounds() }
+        return hit
+    }
+
+    /// 容器の壁：左右・底・下の斜めの角・左右の半円の出っぱり（さわると少しすべりにくくする）
+    private func walls(_ b: Int) {
+        let w = width, h = height, c = chamfer
+        let bumperL = Vec(0, bumperY), bumperR = Vec(w, bumperY)
+        let radius = bumperRadius
+        for i in blobs[b].pos.indices {
+            var p = blobs[b].pos[i]
+            var touched = false
+            if p.x < 0 { p.x = 0; touched = true }
+            if p.x > w { p.x = w; touched = true }
+            if p.y > h { p.y = h; touched = true }
+            // 左下の斜め：x - y >= c - h
+            let left = (p.x - p.y) - (c - h)
+            if left < 0 {
+                p += Vec(1, -1) * (-left / 2)
+                touched = true
+            }
+            // 右下の斜め：-x - y >= c - h - w
+            let right = (-p.x - p.y) - (c - h - w)
+            if right < 0 {
+                p += Vec(-1, -1) * (-right / 2)
+                touched = true
+            }
+            for bumper in [bumperL, bumperR] {
+                let offset = p - bumper
+                let distance = simd_length(offset)
+                if distance < radius, distance > 0.0001 {
+                    p = bumper + offset / distance * radius
+                    touched = true
+                }
+            }
+            if touched {
+                // さわっているところは横の動きを少しおさえる
+                let previous = blobs[b].prev[i]
+                blobs[b].prev[i] = previous + (p - previous) * 0.15
+            }
+            blobs[b].pos[i] = p
         }
     }
+
+    // MARK: - くっつく
 
     private func merge(_ pairs: [(Int, Int)]) {
+        var used = Set<Int>()
         var removed = Set<Int>()
         var born: [Blob] = []
-        for (i, j) in pairs {
-            let a = blobs[i], b = blobs[j]
-            removed.insert(i)
-            removed.insert(j)
-            let level = a.level + 1
-            let center = CGPoint(x: (a.pos.x + b.pos.x) / 2, y: (a.pos.y + b.pos.y) / 2)
-            combo = comboTimer > 0 ? combo + 1 : 1
-            comboTimer = 1.2
-            if level >= Self.levels {
-                // いちばん大きな玉どうし：はじけて消える
-                let points = 5_000 * combo
-                score += points
-                burst(at: center, color: Self.colors[Self.levels - 1], count: 60, speed: 600)
-                floater("+\(points)", at: center, big: true)
-                shake = 18 * scale
-                heavyHaptic.impactOccurred()
-                GameAudio.shared.play(.bomb)
-                continue
+        for (a, b) in pairs where !used.contains(a) && !used.contains(b) {
+            used.insert(a)
+            used.insert(b)
+            removed.insert(a)
+            removed.insert(b)
+            let first = blobs[a], second = blobs[b]
+            let areaA = max(first.currentArea, 1), areaB = max(second.currentArea, 1)
+            let center = (first.center * areaA + second.center * areaB) / (areaA + areaB)
+            let level = first.level + 1
+            // 2 つの玉を合わせた外形を、中心から見た角度ごとに測って、新しい玉の形にする（まわりに食いこまない）
+            let count = pointCount(level)
+            let all = first.pos + second.pos
+            var radii = [Float](repeating: 0, count: count)
+            for p in all {
+                let offset = p - center
+                var angle = atan2(offset.y, offset.x)
+                if angle < 0 { angle += 2 * .pi }
+                let slot = Int((angle / (2 * .pi) * Float(count)).rounded()) % count
+                radii[slot] = max(radii[slot], simd_length(offset))
             }
-            var blob = Blob(id: makeID(), level: level, pos: center, radius: max(a.radius, b.radius) * 1.05)
-            blob.vel = CGVector(dx: (a.vel.dx + b.vel.dx) / 2, dy: min((a.vel.dy + b.vel.dy) / 2, 0) - 120 * scale)
-            blob.squash = 0.3
-            blob.squashAngle = .pi / 2
-            blob.fresh = false
-            blob.age = 0.06
+            let average = radii.filter { $0 > 0 }.reduce(0, +) / Float(max(radii.filter { $0 > 0 }.count, 1))
+            var points: [Vec] = []
+            for index in 0..<count {
+                let angle = Float(index) / Float(count) * 2 * .pi
+                let r = radii[index] > 0 ? radii[index] : average
+                points.append(center + Vec(cos(angle), sin(angle)) * r)
+            }
+            nextID += 1
+            var blob = Blob(id: nextID, level: level, pos: points, prev: points, area: areaA + areaB, targetArea: area(level))
+            blob.age = 0.05
+            blob.updateBounds()
             born.append(blob)
-            let points = (level + 1) * (level + 2) * 5 * combo
-            score += points
-            burst(at: center, color: Self.colors[level], count: 10 + level * 3, speed: 220 + CGFloat(level) * 30)
-            floater(combo > 1 ? "+\(points) ×\(combo)" : "+\(points)", at: center, big: level >= 7)
-            if level > maxLevel {
-                maxLevel = level
-                if level >= 5 { floater("NEW!", at: CGPoint(x: center.x, y: center.y - radius(level) - 10 * scale), big: true) }
-            }
-            if level >= 6 { shake = max(shake, CGFloat(level) * 1.5 * scale) }
-            haptic.impactOccurred(intensity: min(0.4 + CGFloat(level) * 0.06, 1))
-            GameAudio.shared.play(.pop(combo: combo))
+            biggest = max(biggest, level)
+            haptic.impactOccurred(intensity: min(0.4 + CGFloat(level) * 0.05, 1))
+            GameAudio.shared.play(.pop(combo: min(level / 2 + 1, 6)))
+            unlock(level: level)
         }
         blobs = blobs.enumerated().filter { !removed.contains($0.offset) }.map(\.element) + born
-        if score > best {
-            best = score
-            UserDefaults.standard.set(best, forKey: "puniBest")
-        }
+        // 1024 が 3 つ
+        if blobs.filter({ $0.level == 10 }).count >= 3 { achieve("3x 1024") }
     }
 
-    /// ぷるぷる・ふくらみ・粒・文字を動かす
-    private func animate(_ dt: Double) {
-        for index in blobs.indices {
-            blobs[index].age += dt
-            if blobs[index].age > 1.5 { blobs[index].fresh = false }
-            let target = radius(blobs[index].level)
-            blobs[index].radius += (target - blobs[index].radius) * CGFloat(min(1, dt * 10))
-            // ばね：ぷるん、ぷるんと揺れて止まる
-            let k: CGFloat = 220, damping: CGFloat = 9
-            blobs[index].squashVel += (-k * blobs[index].squash - damping * blobs[index].squashVel) * CGFloat(dt)
-            blobs[index].squash += blobs[index].squashVel * CGFloat(dt)
-            blobs[index].blink -= dt
-            if blobs[index].blink < -0.12 { blobs[index].blink = .random(in: 2...5) }
-        }
-        for index in particles.indices {
-            particles[index].vel.dy += 900 * scale * dt
-            particles[index].pos.x += particles[index].vel.dx * dt
-            particles[index].pos.y += particles[index].vel.dy * dt
-            particles[index].life -= dt
-        }
-        particles.removeAll { $0.life <= 0 }
-        for index in floaters.indices {
-            floaters[index].pos.y -= 50 * scale * dt
-            floaters[index].life -= dt
-        }
-        floaters.removeAll { $0.life <= 0 }
-        shake *= CGFloat(max(0, 1 - dt * 10))
+    private func unlock(level: Int) {
+        if [6, 8, 10, 11, 12, 13].contains(level) { achieve("\(1 << level)") }
+    }
+
+    private func achieve(_ name: String) {
+        guard !achieved.contains(name) else { return }
+        achieved.insert(name)
+        UserDefaults.standard.set(Array(achieved), forKey: "puniAchievements")
+        nextID += 1
+        popup = Popup(id: nextID, text: name)
+        GameAudio.shared.play(.win)
     }
 
     private func checkDanger(_ dt: Double) {
-        let over = blobs.contains { !$0.fresh && $0.pos.y - $0.radius < dangerY && abs($0.vel.dy) < 300 * scale }
-        danger = over ? danger + dt : max(0, danger - dt * 2)
-        if danger >= 3 {
+        let over = blobs.contains { $0.age > 1.5 && $0.minY < dangerY }
+        danger = over ? min(danger + dt / 3, 1) : max(0, danger - dt / 2)
+        if danger >= 1 {
             gameOver = true
-            heavyHaptic.impactOccurred()
             GameAudio.shared.play(.lose)
         }
     }
-
-    private func burst(at point: CGPoint, color: Color, count: Int, speed: CGFloat) {
-        for _ in 0..<count {
-            let angle = CGFloat.random(in: 0...(2 * .pi))
-            let velocity = CGFloat.random(in: 0.3...1) * speed * scale
-            particles.append(Particle(id: makeID(), pos: point,
-                                      vel: CGVector(dx: cos(angle) * velocity, dy: sin(angle) * velocity - 150 * scale),
-                                      life: .random(in: 0.4...0.8), size: .random(in: 3...7) * scale, color: color))
-        }
-    }
-
-    private func floater(_ text: String, at point: CGPoint, big: Bool) {
-        floaters.append(Floater(id: makeID(), pos: point, text: text, life: 0.9, big: big))
-    }
-
-    private func makeID() -> Int {
-        nextID += 1
-        return nextID
-    }
-
-    /// 赤い線の危なさ（0〜1）
-    var dangerLevel: Double { min(danger / 3, 1) }
 }
