@@ -16,10 +16,11 @@ struct PuniGameView: View {
         ZStack {
             Color(white: 0.1).ignoresSafeArea()
             // 本家と同じく、左にメニューとタイトル、まんなかに容器、右に縦向きの大きな点数
-            HStack(spacing: 0) {
-                leftColumn
+            // 容器を画面いっぱいに大きく。上に、メニューと大きな灰色の点数
+            VStack(spacing: 4) {
+                topBar
                 GeometryReader { geo in
-                    let outer = min(geo.size.width - 4, geo.size.height / PuniBoard.heightRatio)
+                    let outer = min(geo.size.width - 8, geo.size.height / PuniBoard.heightRatio)
                     let inner = PuniBoard.innerRect(outer: outer)
                     PuniBoard(game: game, picked: picked, finger: finger)
                         .frame(width: outer, height: outer * PuniBoard.heightRatio)
@@ -31,6 +32,7 @@ struct PuniGameView: View {
                                     if picked == nil {
                                         // 指を置いた場所にいちばん近い列の玉を選ぶ
                                         picked = game.queueIndex(near: Float(value.startLocation.x - inner.minX))
+                                        game.holding = true
                                     }
                                     finger = point
                                 }
@@ -42,15 +44,15 @@ struct PuniGameView: View {
                                     }
                                     picked = nil
                                     finger = nil
+                                    game.holding = false
                                 }
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .onAppear { applyLayout(outer) }
                         .onChange(of: outer) { _, value in applyLayout(value) }
                 }
-                rightColumn
             }
-            .padding(.vertical, 8)
+            .padding(.bottom, 4)
             // 点数の増え（右上）
             VStack(alignment: .trailing, spacing: 0) {
                 ForEach(game.gains) { gain in
@@ -60,8 +62,8 @@ struct PuniGameView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .padding(.top, 20)
-            .padding(.trailing, 6)
+            .padding(.top, 70)
+            .padding(.trailing, 16)
             .allowsHitTesting(false)
             if amassShown {
                 Text("amass!")
@@ -130,49 +132,30 @@ struct PuniGameView: View {
         game.layout(width: Float(inner.width), height: Float(inner.height))
     }
 
-    /// 左：メニュー（三本線）と、縦向きのタイトル
-    private var leftColumn: some View {
-        VStack(spacing: 20) {
-            Spacer()
+    /// 上：メニュー（三本線）と、大きな灰色の点数
+    private var topBar: some View {
+        HStack(alignment: .center, spacing: 10) {
             Button {
                 showingMenu = true
             } label: {
                 Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 22, weight: .heavy))
-                    .foregroundStyle(Color(white: 0.3))
-                    .frame(width: 40, height: 40)
+                    .font(.system(size: 24, weight: .heavy))
+                    .foregroundStyle(Color(white: 0.32))
+                    .frame(width: 44, height: 44)
             }
             .accessibilityLabel("メニュー")
-            Text("puni")
-                .font(.system(size: 40, weight: .black, design: .rounded))
-                .foregroundStyle(Color(white: 0.2))
-                .fixedSize()
-                .rotationEffect(.degrees(-90))
-                .frame(width: 44, height: 120)
-            Spacer()
-        }
-        .frame(width: 44)
-    }
-
-    /// 右：縦向きの大きな灰色の点数
-    private var rightColumn: some View {
-        VStack(spacing: 8) {
+            Text("best \(game.best)")
+                .font(.system(size: 13, weight: .heavy, design: .rounded).monospacedDigit())
+                .foregroundStyle(Color(white: 0.32))
             Spacer()
             Text("\(game.score)")
                 .font(.system(size: 54, weight: .black, design: .rounded).monospacedDigit())
-                .foregroundStyle(Color(white: 0.24))
+                .foregroundStyle(Color(white: 0.28))
                 .lineLimit(1)
-                .minimumScaleFactor(0.4)
-                .frame(width: 260)
-                .rotationEffect(.degrees(90))
-                .frame(width: 54, height: 260)
-            Text("best\n\(game.best)")
-                .font(.system(size: 11, weight: .heavy, design: .rounded).monospacedDigit())
-                .multilineTextAlignment(.center)
-                .foregroundStyle(Color(white: 0.3))
-            Spacer()
+                .minimumScaleFactor(0.5)
         }
-        .frame(width: 54)
+        .padding(.horizontal, 12)
+        .frame(height: 60)
     }
 
     private var gameOverCard: some View {
@@ -281,7 +264,7 @@ private struct PuniBoard: View {
         }
         // 上の 2 本の棒：次の玉が列に入ってくるまでの時間（外から内へ白い部分が伸びる）
         let barY = inner.minY * 0.42, barH = max(4, inner.minY * 0.24)
-        let danger = CGFloat(game.queueProgress)
+        let danger = CGFloat(game.queue.count) / 4
         for (start, end, fromRight) in [(size.width * 0.06, size.width * 0.42, false), (size.width * 0.58, size.width * 0.94, true)] {
             let track = CGRect(x: start, y: barY - barH / 2, width: end - start, height: barH)
             context.fill(Path(roundedRect: track, cornerRadius: barH / 2), with: .color(Color(white: 0.12)))
@@ -309,9 +292,19 @@ private struct PuniBoard: View {
     private func drawQueue(_ context: inout GraphicsContext) {
         let h = CGFloat(game.queueHeight)
         let y = CGFloat(game.queueY)
+        let time = Date().timeIntervalSinceReferenceDate
+        // 玉が入ってきた壁が白く光る
+        let flashes = game.gateFlash
+        for (x, flash) in [(CGFloat(0), flashes.left), (CGFloat(game.width), flashes.right)] where flash > 0 {
+            let bar = CGRect(x: x - 3, y: y - h * 0.7, width: 6, height: h * 1.4)
+            context.fill(Path(roundedRect: bar, cornerRadius: 3), with: .color(.white.opacity(flash)))
+        }
         for (index, item) in game.queueLayout().enumerated() {
-            let rect = CGRect(x: CGFloat(item.x - item.width / 2), y: y - h / 2, width: CGFloat(item.width), height: h)
-            let shape = Path(roundedRect: rect, cornerSize: CGSize(width: h * 0.42, height: h * 0.5))
+            // 筒の中で押し合って、少しずつぷにぷに形が変わる
+            let wobble = CGFloat(sin(time * 3 + Double(index) * 1.7)) * 0.05
+            let w = CGFloat(item.width) * (1 + wobble), hh = h * (1 - wobble * 1.4)
+            let rect = CGRect(x: CGFloat(item.x) - w / 2, y: y - hh / 2, width: w, height: hh)
+            let shape = Path(roundedRect: rect, cornerSize: CGSize(width: hh * 0.45, height: hh * 0.5))
             if index == picked {
                 context.stroke(shape, with: .color(.white), lineWidth: 6)
             }

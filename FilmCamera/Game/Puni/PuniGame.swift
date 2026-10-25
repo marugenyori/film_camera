@@ -128,6 +128,7 @@ final class PuniGame: ObservableObject {
 
     init() {
         queue = [0]
+        queueX = [width / 2]
     }
 
     // MARK: - 形と大きさ
@@ -159,6 +160,7 @@ final class PuniGame: ObservableObject {
             blobs[index].area *= sx * sx
             blobs[index].targetArea *= sx * sx
         }
+        queueX = queueX.map { $0 * sx }
         width = newWidth
         height = newHeight
     }
@@ -166,7 +168,10 @@ final class PuniGame: ObservableObject {
     func restart() {
         blobs = []
         queue = [0]
-        queueTimer = 0
+        queueX = [width / 2]
+        shots = 0
+        pending = 0
+        enterTimer = 0
         score = 0
         gains = []
         combo = 0
@@ -177,48 +182,73 @@ final class PuniGame: ObservableObject {
     }
 
     /// 上の列を 4 つまで埋める。いちばん大きな玉に合わせて、ときどき大きめの玉も混ぜる
-    /// 次の玉が列に入ってくるまでの時間（上の 2 本の棒で見せる）
-    private(set) var queueTimer: Double = 0
-    let queueInterval: Double = 1.4
-    var queueProgress: Double { min(queueTimer / queueInterval, 1) }
-    /// 列の筒の長さ（ここに入りきる分だけ玉がたまる）
-    var tubeLength: Float { width * 0.62 }
+    /// 列の玉のいまの横の位置（めざす場所へ、押し合うようにすべっていく）
+    private(set) var queueX: [Float] = []
+    /// 撃った回数（はじめの 3 回は列に 1 個だけ。そのあと 4 個）
+    private var shots = 0
+    /// これから入ってくる玉の数と、次に入るまでの間
+    private var pending = 0
+    private var enterTimer: Double = 0
+    /// 次はどちらの壁から入るか
+    private var enterFromLeft = false
+    /// 壁が白く光る（玉が入ってきたところ）：左・右
+    private(set) var gateFlash: (left: Double, right: Double) = (0, 0)
+    var queueCapacity: Int { shots < 3 ? 1 : 4 }
+    /// 列の玉を押さえている間は、新しい玉を入れない（選んだ玉の番号がずれないように）
+    var holding = false
 
     private func queueWidth(_ level: Int) -> Float { min(max(queueHeight, area(level) / queueHeight * 0.75), width * 0.3) }
 
-    /// 時間がたつと、筒にすき間があれば次の玉が 1 つ入ってくる（小さい数字が多い。大きな玉を作るほど、ときどき大きめも）
-    private func feedQueue(_ dt: Double) {
-        let used = queue.reduce(Float(0)) { $0 + queueWidth($1) + 3 }
-        let top = max(2, min(5, biggest - 3))
-        var level = Int.random(in: 0...top)
-        if Int.random(in: 0..<3) > 0 { level = min(level, Int.random(in: 0...2)) }
-        guard used + queueWidth(level) <= tubeLength else {
-            queueTimer = queueInterval
-            return
+    /// 列の玉がめざす場所（真ん中に寄せて、すき間なく並ぶ）
+    private func queueTargets() -> [Float] {
+        let widths = queue.map(queueWidth)
+        let total = widths.reduce(0, +) + Float(max(widths.count - 1, 0)) * 2
+        var x = width / 2 - total / 2
+        var result: [Float] = []
+        for w in widths {
+            result.append(x + w / 2)
+            x += w + 2
         }
-        queueTimer += dt
-        if queueTimer >= queueInterval {
-            queueTimer = 0
-            queue.append(level)
-        }
+        return result
     }
 
-    // MARK: - 撃つ
+    /// 撃ったあと、左右の壁から新しい玉がひとつずつ飛びこんでくる。ほかの玉は押されて真ん中に寄る
+    private func animateQueue(_ dt: Double) {
+        if queue.count + pending < queueCapacity { pending = queueCapacity - queue.count }
+        enterTimer -= dt
+        if pending > 0, enterTimer <= 0, !holding {
+            pending -= 1
+            enterTimer = 0.28
+            let top = max(1, min(5, biggest - 3))
+            var level = Int.random(in: 0...top)
+            if Int.random(in: 0..<3) > 0 { level = min(level, Int.random(in: 0...1)) }
+            enterFromLeft.toggle()
+            if enterFromLeft {
+                queue.insert(level, at: 0)
+                queueX.insert(-queueWidth(level) / 2, at: 0)
+                gateFlash.left = 1
+            } else {
+                queue.append(level)
+                queueX.append(width + queueWidth(level) / 2)
+                gateFlash.right = 1
+            }
+        }
+        let targets = queueTargets()
+        while queueX.count < queue.count { queueX.append(width / 2) }
+        for index in queue.indices {
+            queueX[index] += (targets[index] - queueX[index]) * Float(min(1, dt * 9))
+        }
+        gateFlash.left = max(0, gateFlash.left - dt * 4)
+        gateFlash.right = max(0, gateFlash.right - dt * 4)
+    }
 
     /// 上の列の並び：玉ごとの中心と幅（細い筒につまっているように、横に長くつぶれて並ぶ）
     var queueHeight: Float { width * 0.085 }
 
     func queueLayout() -> [(level: Int, x: Float, width: Float)] {
-        let h = queueHeight
-        let widths = queue.map { min(max(h, area($0) / h * 0.75), width * 0.3) }
-        let total = widths.reduce(0, +) + Float(max(widths.count - 1, 0)) * 3
-        var x = width / 2 - total / 2
-        var result: [(level: Int, x: Float, width: Float)] = []
-        for (index, level) in queue.enumerated() {
-            result.append((level, x + widths[index] / 2, widths[index]))
-            x += widths[index] + 3
+        queue.indices.map { index in
+            (queue[index], queueX.indices.contains(index) ? queueX[index] : width / 2, queueWidth(queue[index]))
         }
-        return result
     }
 
     /// 指を置いた場所にいちばん近い列の玉（どれでも選んで撃てる）
@@ -249,7 +279,9 @@ final class PuniGame: ObservableObject {
         let level = queue[index]
         let center = launchPoint(index)
         queue.remove(at: index)
-        if queue.isEmpty { queueTimer = max(queueTimer, queueInterval * 0.6) }
+        if queueX.indices.contains(index) { queueX.remove(at: index) }
+        shots += 1
+        enterTimer = max(enterTimer, 0.12)
         var blob = makeBlob(level: level, center: center)
         let velocity = launchVelocity(drag: drag)
         let step = Float(1.0 / 240)
@@ -290,7 +322,7 @@ final class PuniGame: ObservableObject {
             // くっついた直後の大きさから、本来の大きさへ
             blobs[index].area += (blobs[index].targetArea - blobs[index].area) * Float(min(1, dt * 3))
         }
-        feedQueue(dt)
+        animateQueue(dt)
         checkDanger(dt)
         for index in blobs.indices where blobs[index].flash > 0 {
             blobs[index].flash = max(0, blobs[index].flash - dt * 2.5)
