@@ -22,6 +22,8 @@ final class PuniGame: ObservableObject {
         var age: Double = 0
         /// くっついて生まれた直後の白い光（1 → 0）
         var flash: Double = 0
+        /// 上の列（細い筒）の中にいる玉。重力ではなく筒の真ん中へ引かれ、押し合う
+        var queued = false
         var minX: Float = 0, maxX: Float = 0, minY: Float = 0, maxY: Float = 0
 
         var value: Int { 1 << level }
@@ -99,8 +101,6 @@ final class PuniGame: ObservableObject {
     @Published private(set) var score = 0
     @Published private(set) var best = UserDefaults.standard.integer(forKey: "puniBest2")
     @Published private(set) var gameOver = false
-    /// 上の列（先頭が次に撃つ玉）
-    @Published private(set) var queue: [Int] = []
     @Published var popup: Popup?
 
     private(set) var blobs: [Blob] = []
@@ -126,10 +126,7 @@ final class PuniGame: ObservableObject {
     private var achieved: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "puniAchievements") ?? [])
     private let haptic = UIImpactFeedbackGenerator(style: .soft)
 
-    init() {
-        queue = [0]
-        queueX = [width / 2]
-    }
+    init() {}
 
     // MARK: - 形と大きさ
 
@@ -160,17 +157,13 @@ final class PuniGame: ObservableObject {
             blobs[index].area *= sx * sx
             blobs[index].targetArea *= sx * sx
         }
-        queueX = queueX.map { $0 * sx }
         width = newWidth
         height = newHeight
     }
 
     func restart() {
         blobs = []
-        queue = [0]
-        queueX = [width / 2]
         shots = 0
-        pending = 0
         enterTimer = 0
         score = 0
         gains = []
@@ -181,88 +174,61 @@ final class PuniGame: ObservableObject {
         frame += 1
     }
 
-    /// 上の列を 4 つまで埋める。いちばん大きな玉に合わせて、ときどき大きめの玉も混ぜる
-    /// 列の玉のいまの横の位置（めざす場所へ、押し合うようにすべっていく）
-    private(set) var queueX: [Float] = []
+    // MARK: - 上の列（細い筒の中で押し合う、本物のやわらかい玉）
+
     /// 撃った回数（はじめの 3 回は列に 1 個だけ。そのあと 4 個）
     private var shots = 0
-    /// これから入ってくる玉の数と、次に入るまでの間
-    private var pending = 0
     private var enterTimer: Double = 0
     /// 次はどちらの壁から入るか
     private var enterFromLeft = false
     /// 壁が白く光る（玉が入ってきたところ）：左・右
     private(set) var gateFlash: (left: Double, right: Double) = (0, 0)
     var queueCapacity: Int { shots < 3 ? 1 : 4 }
-    /// 列の玉を押さえている間は、新しい玉を入れない（選んだ玉の番号がずれないように）
+    /// 列の玉を押さえている間は、新しい玉を入れない
     var holding = false
-
-    private func queueWidth(_ level: Int) -> Float { min(max(queueHeight, area(level) / queueHeight * 0.75), width * 0.3) }
-
-    /// 列の玉がめざす場所（真ん中に寄せて、すき間なく並ぶ）
-    private func queueTargets() -> [Float] {
-        let widths = queue.map(queueWidth)
-        let total = widths.reduce(0, +) + Float(max(widths.count - 1, 0)) * 2
-        var x = width / 2 - total / 2
-        var result: [Float] = []
-        for w in widths {
-            result.append(x + w / 2)
-            x += w + 2
-        }
-        return result
-    }
-
-    /// 撃ったあと、左右の壁から新しい玉がひとつずつ飛びこんでくる。ほかの玉は押されて真ん中に寄る
-    private func animateQueue(_ dt: Double) {
-        if queue.count + pending < queueCapacity { pending = queueCapacity - queue.count }
-        enterTimer -= dt
-        if pending > 0, enterTimer <= 0, !holding {
-            pending -= 1
-            enterTimer = 0.28
-            let top = max(1, min(5, biggest - 3))
-            var level = Int.random(in: 0...top)
-            if Int.random(in: 0..<3) > 0 { level = min(level, Int.random(in: 0...1)) }
-            enterFromLeft.toggle()
-            if enterFromLeft {
-                queue.insert(level, at: 0)
-                queueX.insert(-queueWidth(level) / 2, at: 0)
-                gateFlash.left = 1
-            } else {
-                queue.append(level)
-                queueX.append(width + queueWidth(level) / 2)
-                gateFlash.right = 1
-            }
-        }
-        let targets = queueTargets()
-        while queueX.count < queue.count { queueX.append(width / 2) }
-        for index in queue.indices {
-            queueX[index] += (targets[index] - queueX[index]) * Float(min(1, dt * 9))
-        }
-        gateFlash.left = max(0, gateFlash.left - dt * 4)
-        gateFlash.right = max(0, gateFlash.right - dt * 4)
-    }
-
-    /// 上の列の並び：玉ごとの中心と幅（細い筒につまっているように、横に長くつぶれて並ぶ）
+    /// 筒の太さ（列の玉はこの高さにつぶれて、横に長くなる）
     var queueHeight: Float { width * 0.085 }
+    var queueCount: Int { blobs.reduce(0) { $0 + ($1.queued ? 1 : 0) } }
 
-    func queueLayout() -> [(level: Int, x: Float, width: Float)] {
-        queue.indices.map { index in
-            (queue[index], queueX.indices.contains(index) ? queueX[index] : width / 2, queueWidth(queue[index]))
-        }
+    /// 列の玉（左から順）：id・数字の段階・横の位置
+    func queueLayout() -> [(id: Int, level: Int, x: Float)] {
+        blobs.filter(\.queued).map { ($0.id, $0.level, $0.center.x) }.sorted { $0.x < $1.x }
     }
 
     /// 指を置いた場所にいちばん近い列の玉（どれでも選んで撃てる）
-    func queueIndex(near x: Float) -> Int? {
-        let layout = queueLayout()
-        guard !layout.isEmpty else { return nil }
-        return layout.indices.min { abs(layout[$0].x - x) < abs(layout[$1].x - x) }
+    func queueBlob(near x: Float) -> Int? {
+        queueLayout().min { abs($0.x - x) < abs($1.x - x) }?.id
     }
 
-    /// 列の玉の場所
-    func launchPoint(_ index: Int) -> Vec {
-        let layout = queueLayout()
-        guard layout.indices.contains(index) else { return Vec(width / 2, queueY) }
-        return Vec(layout[index].x, queueY)
+    /// 列の玉のいまの中心
+    func launchPoint(_ id: Int) -> Vec {
+        blobs.first { $0.id == id }?.center ?? Vec(width / 2, queueY)
+    }
+
+    /// 列に空きがあれば、左右の壁から交互に新しい玉が勢いよく飛びこんでくる（壁が白く光る）
+    private func feedQueue(_ dt: Double) {
+        enterTimer -= dt
+        gateFlash.left = max(0, gateFlash.left - dt * 4)
+        gateFlash.right = max(0, gateFlash.right - dt * 4)
+        guard queueCount < queueCapacity, enterTimer <= 0, !holding else { return }
+        enterTimer = 0.3
+        let top = max(1, min(5, biggest - 3))
+        var level = Int.random(in: 0...top)
+        if Int.random(in: 0..<3) > 0 { level = min(level, Int.random(in: 0...1)) }
+        // 筒に入りきる分だけ（つぶれたときの長さ ≒ 面積 ÷ 筒の太さ）
+        let used = blobs.filter(\.queued).reduce(Float(0)) { $0 + $1.targetArea / (queueHeight * 1.1) }
+        guard used + area(level) / (queueHeight * 1.1) < width * 0.85 else { return }
+        enterFromLeft.toggle()
+        let r = min(radius(level), queueHeight * 0.6)
+        let x = enterFromLeft ? r + 1 : width - r - 1
+        var blob = makeBlob(level: level, center: Vec(x, queueY))
+        blob.queued = true
+        blob.flash = 1
+        let velocity = Vec(enterFromLeft ? width * 1.6 : -width * 1.6, 0)
+        let step = Float(1.0 / 240)
+        for index in blob.prev.indices { blob.prev[index] = blob.pos[index] - velocity * step }
+        blobs.append(blob)
+        if enterFromLeft { gateFlash.left = 1 } else { gateFlash.right = 1 }
     }
 
     /// 引っぱった長さと向きから、撃つ速さ（短いとそっと、長いと強く）
@@ -273,20 +239,16 @@ final class PuniGame: ObservableObject {
         return drag / length * speed
     }
 
-    /// 選んだ列の玉を、指の向きへ撃つ（drag は玉から指まで）
-    func shoot(index: Int, drag: Vec) {
-        guard !gameOver, queue.indices.contains(index) else { return }
-        let level = queue[index]
-        let center = launchPoint(index)
-        queue.remove(at: index)
-        if queueX.indices.contains(index) { queueX.remove(at: index) }
-        shots += 1
-        enterTimer = max(enterTimer, 0.12)
-        var blob = makeBlob(level: level, center: center)
+    /// 選んだ列の玉を筒から放して、指の向きへ撃つ（drag は玉から指まで）
+    func shoot(id: Int, drag: Vec) {
+        guard !gameOver, let index = blobs.firstIndex(where: { $0.id == id && $0.queued }) else { return }
+        blobs[index].queued = false
+        blobs[index].age = 0
         let velocity = launchVelocity(drag: drag)
         let step = Float(1.0 / 240)
-        for index in blob.prev.indices { blob.prev[index] = blob.pos[index] - velocity * step }
-        blobs.append(blob)
+        for p in blobs[index].pos.indices { blobs[index].prev[p] = blobs[index].pos[p] - velocity * step }
+        shots += 1
+        enterTimer = max(enterTimer, 0.15)
         GameAudio.shared.play(.tap)
     }
 
@@ -322,7 +284,7 @@ final class PuniGame: ObservableObject {
             // くっついた直後の大きさから、本来の大きさへ
             blobs[index].area += (blobs[index].targetArea - blobs[index].area) * Float(min(1, dt * 3))
         }
-        animateQueue(dt)
+        feedQueue(dt)
         checkDanger(dt)
         for index in blobs.indices where blobs[index].flash > 0 {
             blobs[index].flash = max(0, blobs[index].flash - dt * 2.5)
@@ -338,6 +300,18 @@ final class PuniGame: ObservableObject {
         let gravity = Vec(0, width * 2.6) * dt * dt
         // 前の動きを引きつぎ（少し弱めて）、重力で落とす
         for b in blobs.indices {
+            if blobs[b].queued {
+                // 筒の中：重力のかわりに筒の真ん中へ引かれ、押し合いながら落ち着く
+                let center = blobs[b].center
+                let pull = Vec((width / 2 - center.x) * 7, (queueY - center.y) * 60) * dt * dt
+                for i in blobs[b].pos.indices {
+                    let p = blobs[b].pos[i]
+                    let velocity = (p - blobs[b].prev[i]) * 0.96
+                    blobs[b].prev[i] = p
+                    blobs[b].pos[i] = p + velocity + pull
+                }
+                continue
+            }
             for i in blobs[b].pos.indices {
                 let p = blobs[b].pos[i]
                 let velocity = (p - blobs[b].prev[i]) * 0.99
@@ -398,11 +372,12 @@ final class PuniGame: ObservableObject {
         let count = blobs.count
         for a in 0..<count {
             for b in (a + 1)..<count {
-                guard blobs[a].maxX >= blobs[b].minX, blobs[b].maxX >= blobs[a].minX,
+                guard blobs[a].queued == blobs[b].queued,
+                      blobs[a].maxX >= blobs[b].minX, blobs[b].maxX >= blobs[a].minX,
                       blobs[a].maxY >= blobs[b].minY, blobs[b].maxY >= blobs[a].minY else { continue }
                 let hitA = push(points: a, into: b)
                 let hitB = push(points: b, into: a)
-                if record, hitA || hitB, blobs[a].level == blobs[b].level, blobs[a].age > 0.15, blobs[b].age > 0.15 {
+                if record, hitA || hitB, !blobs[a].queued, blobs[a].level == blobs[b].level, blobs[a].age > 0.15, blobs[b].age > 0.15 {
                     list.append((a, b))
                 }
             }
@@ -455,6 +430,17 @@ final class PuniGame: ObservableObject {
 
     /// 容器の壁：左右・底・下の斜めの角・左右の半円の出っぱり（さわると少しすべりにくくする）
     private func walls(_ b: Int) {
+        if blobs[b].queued {
+            // 筒の上下と左右の壁（つぶれて横に長くなる）
+            let half = queueHeight * 0.55
+            for i in blobs[b].pos.indices {
+                var p = blobs[b].pos[i]
+                p.x = min(max(p.x, 0), width)
+                p.y = min(max(p.y, queueY - half), queueY + half)
+                blobs[b].pos[i] = p
+            }
+            return
+        }
         let w = width, h = height, c = chamfer
         let bumperL = Vec(0, bumperY), bumperR = Vec(w, bumperY)
         let radius = bumperRadius
@@ -569,7 +555,7 @@ final class PuniGame: ObservableObject {
 
     private func checkDanger(_ dt: Double) {
         // 左右の半円の出っぱりより上まで積み上がると危ない（2 秒で終わり）
-        let over = blobs.contains { $0.age > 1.5 && $0.minY < bumperY }
+        let over = blobs.contains { !$0.queued && $0.age > 1.5 && $0.minY < bumperY }
         danger = over ? min(danger + dt / 2, 1) : max(0, danger - dt / 2)
         if danger >= 1 {
             gameOver = true

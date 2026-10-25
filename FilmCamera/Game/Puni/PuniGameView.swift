@@ -31,7 +31,7 @@ struct PuniGameView: View {
                                     let point = CGPoint(x: value.location.x - inner.minX, y: value.location.y - inner.minY)
                                     if picked == nil {
                                         // 指を置いた場所にいちばん近い列の玉を選ぶ
-                                        picked = game.queueIndex(near: Float(value.startLocation.x - inner.minX))
+                                        picked = game.queueBlob(near: Float(value.startLocation.x - inner.minX))
                                         game.holding = true
                                     }
                                     finger = point
@@ -40,7 +40,7 @@ struct PuniGameView: View {
                                     if let index = picked {
                                         let origin = game.launchPoint(index)
                                         let point = CGPoint(x: value.location.x - inner.minX, y: value.location.y - inner.minY)
-                                        game.shoot(index: index, drag: PuniGame.Vec(Float(point.x) - origin.x, Float(point.y) - origin.y))
+                                        game.shoot(id: index, drag: PuniGame.Vec(Float(point.x) - origin.x, Float(point.y) - origin.y))
                                     }
                                     picked = nil
                                     finger = nil
@@ -264,7 +264,7 @@ private struct PuniBoard: View {
         }
         // 上の 2 本の棒：次の玉が列に入ってくるまでの時間（外から内へ白い部分が伸びる）
         let barY = inner.minY * 0.42, barH = max(4, inner.minY * 0.24)
-        let danger = CGFloat(game.queue.count) / 4
+        let danger = CGFloat(game.queueCount) / 4
         for (start, end, fromRight) in [(size.width * 0.06, size.width * 0.42, false), (size.width * 0.58, size.width * 0.94, true)] {
             let track = CGRect(x: start, y: barY - barH / 2, width: end - start, height: barH)
             context.fill(Path(roundedRect: track, cornerRadius: barH / 2), with: .color(Color(white: 0.12)))
@@ -273,10 +273,10 @@ private struct PuniBoard: View {
             context.fill(Path(roundedRect: lit, cornerRadius: barH / 2), with: .color(Color(white: 0.42)))
         }
         // 上のふちの小さな点（列の玉の場所）
-        for (index, item) in game.queueLayout().enumerated() {
+        for item in game.queueLayout() {
             let x = inner.minX + CGFloat(item.x)
             context.fill(Path(ellipseIn: CGRect(x: x - 3, y: inner.minY + 2, width: 6, height: 6)),
-                         with: .color(index == picked ? .white : Color(white: 0.35)))
+                         with: .color(item.id == picked ? .white : Color(white: 0.35)))
         }
         // はじめの遊び方
         if game.blobs.isEmpty, game.score == 0 {
@@ -292,24 +292,11 @@ private struct PuniBoard: View {
     private func drawQueue(_ context: inout GraphicsContext) {
         let h = CGFloat(game.queueHeight)
         let y = CGFloat(game.queueY)
-        let time = Date().timeIntervalSinceReferenceDate
         // 玉が入ってきた壁が白く光る
         let flashes = game.gateFlash
         for (x, flash) in [(CGFloat(0), flashes.left), (CGFloat(game.width), flashes.right)] where flash > 0 {
             let bar = CGRect(x: x - 3, y: y - h * 0.7, width: 6, height: h * 1.4)
             context.fill(Path(roundedRect: bar, cornerRadius: 3), with: .color(.white.opacity(flash)))
-        }
-        for (index, item) in game.queueLayout().enumerated() {
-            // 筒の中で押し合って、少しずつぷにぷに形が変わる
-            let wobble = CGFloat(sin(time * 3 + Double(index) * 1.7)) * 0.05
-            let w = CGFloat(item.width) * (1 + wobble), hh = h * (1 - wobble * 1.4)
-            let rect = CGRect(x: CGFloat(item.x) - w / 2, y: y - hh / 2, width: w, height: hh)
-            let shape = Path(roundedRect: rect, cornerSize: CGSize(width: hh * 0.45, height: hh * 0.5))
-            if index == picked {
-                context.stroke(shape, with: .color(.white), lineWidth: 6)
-            }
-            context.fill(shape, with: .color(PuniGame.color(item.level)))
-            label(&context, value: 1 << item.level, at: CGPoint(x: rect.midX, y: rect.midY), size: h * 0.5, dim: true, rotation: 0)
         }
     }
 
@@ -325,14 +312,23 @@ private struct PuniBoard: View {
             shape.addQuadCurve(to: CGPoint(x: (current.x + following.x) / 2, y: (current.y + following.y) / 2), control: current)
         }
         shape.closeSubpath()
+        if blob.id == picked {
+            // 押さえている列の玉は白くふちどる
+            context.stroke(shape, with: .color(.white), lineWidth: 7)
+        }
         context.fill(shape, with: .color(PuniGame.color(blob.level)))
         if blob.flash > 0 {
             // くっついて生まれた直後は白く光る
             context.fill(shape, with: .color(.white.opacity(blob.flash * 0.85)))
         }
         context.stroke(shape, with: .color(.black), lineWidth: 2)
-        let size = CGFloat(sqrt(max(blob.currentArea, 1))) * 0.34
-        label(&context, value: blob.value, at: point(blob.center), size: size, dim: false, rotation: CGFloat(blob.rotation))
+        if blob.queued {
+            // 列の玉の数字は回さず、少し暗く
+            label(&context, value: blob.value, at: point(blob.center), size: CGFloat(game.queueHeight) * 0.5, dim: true, rotation: 0)
+        } else {
+            let size = CGFloat(sqrt(max(blob.currentArea, 1))) * 0.34
+            label(&context, value: blob.value, at: point(blob.center), size: size, dim: false, rotation: CGFloat(blob.rotation))
+        }
     }
 
     /// 玉の数字（黒。撃ったばかり・列のうしろの玉は色の濃い版にして目立たなくする）
