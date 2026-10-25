@@ -1,12 +1,14 @@
 import SwiftUI
 
 /// 「ぷにぷにシューター」の画面（sobosuba の見た目にそろえる）：暗い灰色の背景、灰色のわくの黒い容器、
-/// 上に次の玉の列、大きな灰色の点数。どこかに指を置いて引っぱると、列の先頭の玉からその向きに矢印が出て、はなすと撃つ
+/// 上に次の玉の列、大きな灰色の点数。列のどの玉でも、近くに指を置いて引っぱると選んだ玉から指へ矢印が出て、はなすとその向きに撃つ
 struct PuniGameView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var game = PuniGame()
-    @State private var aimStart: CGPoint?
-    @State private var aimNow: CGPoint?
+    /// 選んだ列の玉と、指の場所（容器の中の座標）
+    @State private var picked: Int?
+    @State private var finger: CGPoint?
+    @State private var amassShown = false
     @State private var ticker: MartTicker?
     @State private var showingMenu = false
 
@@ -17,27 +19,57 @@ struct PuniGameView: View {
                 header
                 GeometryReader { geo in
                     let outer = min(geo.size.width - 16, geo.size.height / PuniBoard.heightRatio)
-                    PuniBoard(game: game, aimStart: aimStart, aimNow: aimNow)
+                    let inner = PuniBoard.innerRect(outer: outer)
+                    PuniBoard(game: game, picked: picked, finger: finger)
                         .frame(width: outer, height: outer * PuniBoard.heightRatio)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    let point = CGPoint(x: value.location.x - inner.minX, y: value.location.y - inner.minY)
+                                    if picked == nil {
+                                        // 指を置いた場所にいちばん近い列の玉を選ぶ
+                                        picked = game.queueIndex(near: Float(value.startLocation.x - inner.minX))
+                                    }
+                                    finger = point
+                                }
+                                .onEnded { value in
+                                    if let index = picked {
+                                        let origin = game.launchPoint(index)
+                                        let point = CGPoint(x: value.location.x - inner.minX, y: value.location.y - inner.minY)
+                                        game.shoot(index: index, drag: PuniGame.Vec(Float(point.x) - origin.x, Float(point.y) - origin.y))
+                                    }
+                                    picked = nil
+                                    finger = nil
+                                }
+                        )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .onAppear { applyLayout(outer) }
                         .onChange(of: outer) { _, value in applyLayout(value) }
                 }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            if aimStart == nil { aimStart = value.startLocation }
-                            aimNow = value.location
-                        }
-                        .onEnded { value in
-                            let drag = PuniGame.Vec(Float(value.location.x - value.startLocation.x),
-                                                    Float(value.location.y - value.startLocation.y))
-                            game.shoot(drag: drag)
-                            aimStart = nil
-                            aimNow = nil
-                        }
-                )
+            }
+            // 点数の増え（右上）
+            VStack(alignment: .trailing, spacing: 0) {
+                ForEach(game.gains) { gain in
+                    Text(gain.text)
+                        .font(.system(size: 18, weight: .black, design: .rounded))
+                        .foregroundStyle(.white.opacity(min(1, gain.life)))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(.top, 86)
+            .padding(.trailing, 22)
+            .allowsHitTesting(false)
+            if amassShown {
+                Text("amass!")
+                    .font(.system(size: 64, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black, radius: 0, x: 3, y: 3)
+                    .shadow(color: .black, radius: 0, x: -3, y: -3)
+                    .shadow(color: .black, radius: 0, x: 3, y: -3)
+                    .shadow(color: .black, radius: 0, x: -3, y: 3)
+                    .transition(.scale(scale: 0.5).combined(with: .opacity))
+                    .allowsHitTesting(false)
             }
             if let popup = game.popup {
                 VStack(spacing: 2) {
@@ -61,6 +93,14 @@ struct PuniGameView: View {
             if game.gameOver { gameOverCard }
         }
         .animation(.spring(duration: 0.4, bounce: 0.3), value: game.popup)
+        .animation(.spring(duration: 0.35, bounce: 0.5), value: amassShown)
+        .onChange(of: game.amass) { _, _ in
+            amassShown = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.2))
+                amassShown = false
+            }
+        }
         .animation(.spring(duration: 0.4, bounce: 0.3), value: game.gameOver)
         .preferredColorScheme(.dark)
         .statusBarHidden()
@@ -152,8 +192,8 @@ struct PuniGameView: View {
 /// 容器と玉を描く（毎コマ描き直す）。わくの外の大きさ outer に対して、中の黒いところの場所を決める
 private struct PuniBoard: View {
     @ObservedObject var game: PuniGame
-    let aimStart: CGPoint?
-    let aimNow: CGPoint?
+    let picked: Int?
+    let finger: CGPoint?
 
     /// わくの太さ（横・下）と、上のわく（棒が 2 本入る）の太さ
     static func side(_ outer: CGFloat) -> CGFloat { outer * 0.04 }
@@ -242,11 +282,11 @@ private struct PuniBoard: View {
         for (index, item) in game.queueLayout().enumerated() {
             let rect = CGRect(x: CGFloat(item.x - item.width / 2), y: y - h / 2, width: CGFloat(item.width), height: h)
             let shape = Path(roundedRect: rect, cornerSize: CGSize(width: h * 0.42, height: h * 0.5))
-            if index == 0, aimStart != nil {
+            if index == picked {
                 context.stroke(shape, with: .color(.white), lineWidth: 6)
             }
             context.fill(shape, with: .color(PuniGame.color(item.level)))
-            label(&context, value: 1 << item.level, at: CGPoint(x: rect.midX, y: rect.midY), size: h * 0.5, dim: index > 0)
+            label(&context, value: 1 << item.level, at: CGPoint(x: rect.midX, y: rect.midY), size: h * 0.5, dim: true, rotation: 0)
         }
     }
 
@@ -263,38 +303,46 @@ private struct PuniBoard: View {
         }
         shape.closeSubpath()
         context.fill(shape, with: .color(PuniGame.color(blob.level)))
+        if blob.flash > 0 {
+            // くっついて生まれた直後は白く光る
+            context.fill(shape, with: .color(.white.opacity(blob.flash * 0.85)))
+        }
         context.stroke(shape, with: .color(.black), lineWidth: 2)
         let size = CGFloat(sqrt(max(blob.currentArea, 1))) * 0.34
-        label(&context, value: blob.value, at: point(blob.center), size: size, dim: blob.age < 0.5)
+        label(&context, value: blob.value, at: point(blob.center), size: size, dim: false, rotation: CGFloat(blob.rotation))
     }
 
     /// 玉の数字（黒。撃ったばかり・列のうしろの玉は色の濃い版にして目立たなくする）
-    private func label(_ context: inout GraphicsContext, value: Int, at point: CGPoint, size: CGFloat, dim: Bool) {
+    private func label(_ context: inout GraphicsContext, value: Int, at point: CGPoint, size: CGFloat, dim: Bool, rotation: CGFloat) {
         let digits = CGFloat(String(value).count)
         let fontSize = min(size, size * 2.6 / max(digits, 1))
         let text = Text("\(value)")
             .font(.system(size: max(fontSize, 8), weight: .black, design: .rounded))
             .foregroundStyle(dim ? Color.black.opacity(0.45) : Color.black)
-        context.draw(text, at: point)
+        // 玉が転がると数字も一緒に回る
+        var copy = context
+        copy.translateBy(x: point.x, y: point.y)
+        copy.rotate(by: .radians(rotation))
+        copy.draw(text, at: .zero)
     }
 
-    /// ねらい：先頭の玉の中心に白い点、引っぱった向きに白い矢印
+    /// ねらい：選んだ玉から指まで白い線と矢印、指の場所に灰色の点
     private func drawAim(_ context: inout GraphicsContext, inner: CGRect) {
-        guard let start = aimStart, let now = aimNow, !game.gameOver else { return }
-        let origin = point(game.launchPoint)
-        let dx = now.x - start.x, dy = now.y - start.y
+        guard let index = picked, let finger, !game.gameOver else { return }
+        let origin = point(game.launchPoint(index))
+        let dx = finger.x - origin.x, dy = finger.y - origin.y
         let length = hypot(dx, dy)
-        context.fill(Path(ellipseIn: CGRect(x: origin.x - 9, y: origin.y - 9, width: 18, height: 18)), with: .color(.white))
-        guard length > 6 else { return }
-        let shown = min(length, inner.width * 0.7)
-        let end = CGPoint(x: origin.x + dx / length * shown, y: origin.y + dy / length * shown)
+        context.fill(Path(ellipseIn: CGRect(x: finger.x - 11, y: finger.y - 11, width: 22, height: 22)), with: .color(Color(white: 0.5)))
+        context.fill(Path(ellipseIn: CGRect(x: finger.x - 6, y: finger.y - 6, width: 12, height: 12)), with: .color(Color(white: 0.75)))
+        guard length > 14 else { return }
+        let end = CGPoint(x: origin.x + dx / length * (length - 14), y: origin.y + dy / length * (length - 14))
         var arrow = Path()
         arrow.move(to: origin)
         arrow.addLine(to: end)
         let angle = atan2(dy, dx)
         for side in [-1.0, 1.0] as [CGFloat] {
             arrow.move(to: end)
-            arrow.addLine(to: CGPoint(x: end.x - cos(angle + side * 0.45) * 22, y: end.y - sin(angle + side * 0.45) * 22))
+            arrow.addLine(to: CGPoint(x: end.x - cos(angle + side * 0.45) * 20, y: end.y - sin(angle + side * 0.45) * 20))
         }
         context.stroke(arrow, with: .color(.white), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
     }

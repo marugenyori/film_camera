@@ -20,9 +20,17 @@ final class PuniGame: ObservableObject {
         var area: Float
         var targetArea: Float
         var age: Double = 0
+        /// くっついて生まれた直後の白い光（1 → 0）
+        var flash: Double = 0
         var minX: Float = 0, maxX: Float = 0, minY: Float = 0, maxY: Float = 0
 
         var value: Int { 1 << level }
+
+        /// 向き（はじめの点が中心から見てどちらにあるか。数字を玉と一緒に回す）
+        var rotation: Float {
+            let offset = pos[0] - center
+            return atan2(offset.y, offset.x)
+        }
 
         var center: Vec {
             var sum = Vec(0, 0)
@@ -102,6 +110,17 @@ final class PuniGame: ObservableObject {
     /// 上の線の危なさ（0〜1）
     private(set) var danger: Double = 0
     private var nextID = 0
+    /// 点数の増え（右上に「+16」と出す）
+    struct Gain: Identifiable {
+        let id: Int
+        let text: String
+        var life: Double
+    }
+    private(set) var gains: [Gain] = []
+    /// 続けてくっついたら「amass!」
+    @Published private(set) var amass = 0
+    private var combo = 0
+    private var comboTimer: Double = 0
     private var accumulator: Double = 0
     private var biggest = 0
     private var achieved: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "puniAchievements") ?? [])
@@ -149,6 +168,8 @@ final class PuniGame: ObservableObject {
         queue = []
         refillQueue()
         score = 0
+        gains = []
+        combo = 0
         biggest = 0
         danger = 0
         gameOver = false
@@ -172,19 +193,30 @@ final class PuniGame: ObservableObject {
 
     func queueLayout() -> [(level: Int, x: Float, width: Float)] {
         let h = queueHeight
-        var x = width * 0.3
+        let widths = queue.map { min(max(h, area($0) / h * 0.75), width * 0.3) }
+        let total = widths.reduce(0, +) + Float(max(widths.count - 1, 0)) * 3
+        var x = width / 2 - total / 2
         var result: [(level: Int, x: Float, width: Float)] = []
         for (index, level) in queue.enumerated() {
-            let w = min(max(h, area(level) / h * 0.75), width * 0.34)
-            if index == 0 { x -= w / 2 }
-            result.append((level, x + w / 2, w))
-            x += w + 3
+            result.append((level, x + widths[index] / 2, widths[index]))
+            x += widths[index] + 3
         }
         return result
     }
 
-    /// 撃つ場所（列の先頭の玉の中心）
-    var launchPoint: Vec { Vec(queueLayout().first?.x ?? width * 0.3, queueY) }
+    /// 指を置いた場所にいちばん近い列の玉（どれでも選んで撃てる）
+    func queueIndex(near x: Float) -> Int? {
+        let layout = queueLayout()
+        guard !layout.isEmpty else { return nil }
+        return layout.indices.min { abs(layout[$0].x - x) < abs(layout[$1].x - x) }
+    }
+
+    /// 列の玉の場所
+    func launchPoint(_ index: Int) -> Vec {
+        let layout = queueLayout()
+        guard layout.indices.contains(index) else { return Vec(width / 2, queueY) }
+        return Vec(layout[index].x, queueY)
+    }
 
     /// 引っぱった長さと向きから、撃つ速さ（短いとそっと、長いと強く）
     func launchVelocity(drag: Vec) -> Vec {
@@ -194,10 +226,12 @@ final class PuniGame: ObservableObject {
         return drag / length * speed
     }
 
-    func shoot(drag: Vec) {
-        guard !gameOver, let level = queue.first else { return }
-        let center = launchPoint
-        queue.removeFirst()
+    /// 選んだ列の玉を、指の向きへ撃つ（drag は玉から指まで）
+    func shoot(index: Int, drag: Vec) {
+        guard !gameOver, queue.indices.contains(index) else { return }
+        let level = queue[index]
+        let center = launchPoint(index)
+        queue.remove(at: index)
         var blob = makeBlob(level: level, center: center)
         let velocity = launchVelocity(drag: drag)
         let step = Float(1.0 / 240)
@@ -240,14 +274,13 @@ final class PuniGame: ObservableObject {
             blobs[index].area += (blobs[index].targetArea - blobs[index].area) * Float(min(1, dt * 3))
         }
         checkDanger(dt)
-        let total = blobs.reduce(0) { $0 + $1.value }
-        if total != score {
-            score = total
-            if score > best {
-                best = score
-                UserDefaults.standard.set(best, forKey: "puniBest2")
-            }
+        for index in blobs.indices where blobs[index].flash > 0 {
+            blobs[index].flash = max(0, blobs[index].flash - dt * 2.5)
         }
+        for index in gains.indices { gains[index].life -= dt }
+        gains.removeAll { $0.life <= 0 }
+        comboTimer -= dt
+        if comboTimer <= 0 { combo = 0 }
         frame &+= 1
     }
 
@@ -446,6 +479,15 @@ final class PuniGame: ObservableObject {
             nextID += 1
             var blob = Blob(id: nextID, level: level, pos: points, prev: points, area: areaA + areaB, targetArea: area(level))
             blob.age = 0.05
+            blob.flash = 1
+            // 点数：生まれた玉の数字
+            score += blob.value
+            nextID += 1
+            gains.append(Gain(id: nextID, text: "+\(blob.value)", life: 1.6))
+            if gains.count > 6 { gains.removeFirst(gains.count - 6) }
+            combo = comboTimer > 0 ? combo + 1 : 1
+            comboTimer = 1.0
+            if combo == 3 { amass += 1 }
             blob.updateBounds()
             born.append(blob)
             biggest = max(biggest, level)
@@ -454,6 +496,10 @@ final class PuniGame: ObservableObject {
             unlock(level: level)
         }
         blobs = blobs.enumerated().filter { !removed.contains($0.offset) }.map(\.element) + born
+        if score > best {
+            best = score
+            UserDefaults.standard.set(best, forKey: "puniBest2")
+        }
         // 1024 が 3 つ
         if blobs.filter({ $0.level == 10 }).count >= 3 { achieve("3x 1024") }
     }
