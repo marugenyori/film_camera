@@ -15,10 +15,11 @@ struct PuniGameView: View {
     var body: some View {
         ZStack {
             Color(white: 0.1).ignoresSafeArea()
-            VStack(spacing: 6) {
-                header
+            // 本家と同じく、左にメニューとタイトル、まんなかに容器、右に縦向きの大きな点数
+            HStack(spacing: 0) {
+                leftColumn
                 GeometryReader { geo in
-                    let outer = min(geo.size.width - 16, geo.size.height / PuniBoard.heightRatio)
+                    let outer = min(geo.size.width - 4, geo.size.height / PuniBoard.heightRatio)
                     let inner = PuniBoard.innerRect(outer: outer)
                     PuniBoard(game: game, picked: picked, finger: finger)
                         .frame(width: outer, height: outer * PuniBoard.heightRatio)
@@ -47,7 +48,9 @@ struct PuniGameView: View {
                         .onAppear { applyLayout(outer) }
                         .onChange(of: outer) { _, value in applyLayout(value) }
                 }
+                rightColumn
             }
+            .padding(.vertical, 8)
             // 点数の増え（右上）
             VStack(alignment: .trailing, spacing: 0) {
                 ForEach(game.gains) { gain in
@@ -57,8 +60,8 @@ struct PuniGameView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .padding(.top, 86)
-            .padding(.trailing, 22)
+            .padding(.top, 20)
+            .padding(.trailing, 6)
             .allowsHitTesting(false)
             if amassShown {
                 Text("amass!")
@@ -127,32 +130,49 @@ struct PuniGameView: View {
         game.layout(width: Float(inner.width), height: Float(inner.height))
     }
 
-    /// 上：メニュー（三本線）と、大きな灰色の点数
-    private var header: some View {
-        HStack(alignment: .center, spacing: 14) {
+    /// 左：メニュー（三本線）と、縦向きのタイトル
+    private var leftColumn: some View {
+        VStack(spacing: 20) {
+            Spacer()
             Button {
                 showingMenu = true
             } label: {
                 Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 26, weight: .heavy))
+                    .font(.system(size: 22, weight: .heavy))
                     .foregroundStyle(Color(white: 0.3))
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
             }
             .accessibilityLabel("メニュー")
+            Text("puni")
+                .font(.system(size: 40, weight: .black, design: .rounded))
+                .foregroundStyle(Color(white: 0.2))
+                .fixedSize()
+                .rotationEffect(.degrees(-90))
+                .frame(width: 44, height: 120)
             Spacer()
-            VStack(alignment: .trailing, spacing: -6) {
-                Text("\(game.score)")
-                    .font(.system(size: 64, weight: .black, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Color(white: 0.27))
-                    .contentTransition(.numericText())
-                    .animation(.snappy, value: game.score)
-                Text("best \(game.best)")
-                    .font(.system(size: 14, weight: .heavy, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Color(white: 0.3))
-            }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 4)
+        .frame(width: 44)
+    }
+
+    /// 右：縦向きの大きな灰色の点数
+    private var rightColumn: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Text("\(game.score)")
+                .font(.system(size: 54, weight: .black, design: .rounded).monospacedDigit())
+                .foregroundStyle(Color(white: 0.24))
+                .lineLimit(1)
+                .minimumScaleFactor(0.4)
+                .frame(width: 260)
+                .rotationEffect(.degrees(90))
+                .frame(width: 54, height: 260)
+            Text("best\n\(game.best)")
+                .font(.system(size: 11, weight: .heavy, design: .rounded).monospacedDigit())
+                .multilineTextAlignment(.center)
+                .foregroundStyle(Color(white: 0.3))
+            Spacer()
+        }
+        .frame(width: 54)
     }
 
     private var gameOverCard: some View {
@@ -252,26 +272,36 @@ private struct PuniBoard: View {
         for x in [inner.minX, inner.maxX] {
             context.fill(Path(ellipseIn: CGRect(x: x - radius, y: by - radius, width: radius * 2, height: radius * 2)),
                          with: .color(Color(white: 0.27)))
+            // 積み上がって危ないと、赤く点滅する（ここを越えると終わり）
+            let warn = game.danger > 0 && Int(Date().timeIntervalSinceReferenceDate * 6) % 2 == 0
             context.fill(Path(ellipseIn: CGRect(x: x - radius * 0.8, y: by - radius * 0.8, width: radius * 1.6, height: radius * 1.6)),
-                         with: .color(Color(white: 0.4)))
+                         with: .color(warn ? Color(red: 0.9, green: 0.25, blue: 0.25) : Color(white: 0.4)))
             context.fill(Path(roundedRect: CGRect(x: x - 2.5, y: by - radius * 1.6, width: 5, height: radius * 3.2), cornerRadius: 2.5),
                          with: .color(Color(white: 0.12)))
         }
-        // 上の 2 本の棒：危なさに合わせて白い部分が伸びる
+        // 上の 2 本の棒：次の玉が列に入ってくるまでの時間（外から内へ白い部分が伸びる）
         let barY = inner.minY * 0.42, barH = max(4, inner.minY * 0.24)
-        let danger = CGFloat(game.danger)
+        let danger = CGFloat(game.queueProgress)
         for (start, end, fromRight) in [(size.width * 0.06, size.width * 0.42, false), (size.width * 0.58, size.width * 0.94, true)] {
             let track = CGRect(x: start, y: barY - barH / 2, width: end - start, height: barH)
             context.fill(Path(roundedRect: track, cornerRadius: barH / 2), with: .color(Color(white: 0.12)))
-            let fill = max(0.12, danger) * track.width
+            let fill = max(0.04, danger) * track.width
             let lit = CGRect(x: fromRight ? track.maxX - fill : track.minX, y: track.minY, width: fill, height: barH)
-            context.fill(Path(roundedRect: lit, cornerRadius: barH / 2),
-                         with: .color(danger > 0.05 ? Color(white: 0.45 + 0.5 * danger) : Color(white: 0.4)))
+            context.fill(Path(roundedRect: lit, cornerRadius: barH / 2), with: .color(Color(white: 0.42)))
         }
         // 上のふちの小さな点（列の玉の場所）
-        for item in game.queueLayout() {
+        for (index, item) in game.queueLayout().enumerated() {
             let x = inner.minX + CGFloat(item.x)
-            context.fill(Path(ellipseIn: CGRect(x: x - 3, y: inner.minY + 2, width: 6, height: 6)), with: .color(Color(white: 0.35)))
+            context.fill(Path(ellipseIn: CGRect(x: x - 3, y: inner.minY + 2, width: 6, height: 6)),
+                         with: .color(index == picked ? .white : Color(white: 0.35)))
+        }
+        // はじめの遊び方
+        if game.blobs.isEmpty, game.score == 0 {
+            let lines = ["玉を押さえて", "引っぱってねらい", "はなして撃つ"]
+            for (index, line) in lines.enumerated() {
+                context.draw(Text(line).font(.system(size: 17, weight: .bold, design: .rounded)).foregroundStyle(.white),
+                             at: CGPoint(x: inner.midX, y: inner.minY + inner.height * (0.36 + CGFloat(index) * 0.08)))
+            }
         }
     }
 

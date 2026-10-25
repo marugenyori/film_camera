@@ -127,7 +127,7 @@ final class PuniGame: ObservableObject {
     private let haptic = UIImpactFeedbackGenerator(style: .soft)
 
     init() {
-        refillQueue()
+        queue = [0]
     }
 
     // MARK: - 形と大きさ
@@ -165,8 +165,8 @@ final class PuniGame: ObservableObject {
 
     func restart() {
         blobs = []
-        queue = []
-        refillQueue()
+        queue = [0]
+        queueTimer = 0
         score = 0
         gains = []
         combo = 0
@@ -177,11 +177,28 @@ final class PuniGame: ObservableObject {
     }
 
     /// 上の列を 4 つまで埋める。いちばん大きな玉に合わせて、ときどき大きめの玉も混ぜる
-    private func refillQueue() {
-        while queue.count < 4 {
-            let top = max(1, min(6, biggest - 4))
-            var level = Int.random(in: 0...top)
-            if Int.random(in: 0..<2) == 0 { level = min(level, Int.random(in: 0...2)) }
+    /// 次の玉が列に入ってくるまでの時間（上の 2 本の棒で見せる）
+    private(set) var queueTimer: Double = 0
+    let queueInterval: Double = 1.4
+    var queueProgress: Double { min(queueTimer / queueInterval, 1) }
+    /// 列の筒の長さ（ここに入りきる分だけ玉がたまる）
+    var tubeLength: Float { width * 0.62 }
+
+    private func queueWidth(_ level: Int) -> Float { min(max(queueHeight, area(level) / queueHeight * 0.75), width * 0.3) }
+
+    /// 時間がたつと、筒にすき間があれば次の玉が 1 つ入ってくる（小さい数字が多い。大きな玉を作るほど、ときどき大きめも）
+    private func feedQueue(_ dt: Double) {
+        let used = queue.reduce(Float(0)) { $0 + queueWidth($1) + 3 }
+        let top = max(2, min(5, biggest - 3))
+        var level = Int.random(in: 0...top)
+        if Int.random(in: 0..<3) > 0 { level = min(level, Int.random(in: 0...2)) }
+        guard used + queueWidth(level) <= tubeLength else {
+            queueTimer = queueInterval
+            return
+        }
+        queueTimer += dt
+        if queueTimer >= queueInterval {
+            queueTimer = 0
             queue.append(level)
         }
     }
@@ -232,12 +249,12 @@ final class PuniGame: ObservableObject {
         let level = queue[index]
         let center = launchPoint(index)
         queue.remove(at: index)
+        if queue.isEmpty { queueTimer = max(queueTimer, queueInterval * 0.6) }
         var blob = makeBlob(level: level, center: center)
         let velocity = launchVelocity(drag: drag)
         let step = Float(1.0 / 240)
         for index in blob.prev.indices { blob.prev[index] = blob.pos[index] - velocity * step }
         blobs.append(blob)
-        refillQueue()
         GameAudio.shared.play(.tap)
     }
 
@@ -273,6 +290,7 @@ final class PuniGame: ObservableObject {
             // くっついた直後の大きさから、本来の大きさへ
             blobs[index].area += (blobs[index].targetArea - blobs[index].area) * Float(min(1, dt * 3))
         }
+        feedQueue(dt)
         checkDanger(dt)
         for index in blobs.indices where blobs[index].flash > 0 {
             blobs[index].flash = max(0, blobs[index].flash - dt * 2.5)
@@ -518,8 +536,9 @@ final class PuniGame: ObservableObject {
     }
 
     private func checkDanger(_ dt: Double) {
-        let over = blobs.contains { $0.age > 1.5 && $0.minY < dangerY }
-        danger = over ? min(danger + dt / 3, 1) : max(0, danger - dt / 2)
+        // 左右の半円の出っぱりより上まで積み上がると危ない（2 秒で終わり）
+        let over = blobs.contains { $0.age > 1.5 && $0.minY < bumperY }
+        danger = over ? min(danger + dt / 2, 1) : max(0, danger - dt / 2)
         if danger >= 1 {
             gameOver = true
             GameAudio.shared.play(.lose)
