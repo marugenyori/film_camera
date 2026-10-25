@@ -202,11 +202,11 @@ private struct PuniBoard: View {
     static func side(_ outer: CGFloat) -> CGFloat { outer * 0.04 }
     static func top(_ outer: CGFloat) -> CGFloat { outer * 0.065 }
     /// 外の高さ ÷ 外の幅
-    static let heightRatio: CGFloat = 0.92 * 1.07 + 0.065 + 0.04
+    static let heightRatio: CGFloat = 0.92 * 1.2 + 0.065 + 0.04
 
     static func innerRect(outer: CGFloat) -> CGRect {
         let w = outer - side(outer) * 2
-        return CGRect(x: side(outer), y: top(outer), width: w, height: w * 1.07)
+        return CGRect(x: side(outer), y: top(outer), width: w, height: w * 1.2)
     }
 
     var body: some View {

@@ -141,7 +141,7 @@ final class PuniGame: ObservableObject {
     var bumperRadius: Float { width * 0.065 }
 
     /// 数字の玉の半径（面積は数字の 0.42 乗に比例して大きくなる）
-    func radius(_ level: Int) -> Float { width * 0.046 * pow(2, Float(level) * 0.209) }
+    func radius(_ level: Int) -> Float { width * 0.054 * pow(2, Float(level) * 0.209) }
     func area(_ level: Int) -> Float { let r = radius(level); return .pi * r * r }
     /// まわりの点の数（大きい玉ほど多い）
     func pointCount(_ level: Int) -> Int { min(max(Int(radius(level) * 2 * .pi / (width * 0.032)), 10), 30) }
@@ -187,7 +187,7 @@ final class PuniGame: ObservableObject {
     /// 列の玉を押さえている間は、新しい玉を入れない
     var holding = false
     /// 筒の太さ（列の玉はこの高さにつぶれて、横に長くなる）
-    var queueHeight: Float { width * 0.085 }
+    var queueHeight: Float { width * 0.095 }
     var queueCount: Int { blobs.reduce(0) { $0 + ($1.queued ? 1 : 0) } }
 
     /// 列の玉（左から順）：id・数字の段階・横の位置
@@ -314,7 +314,7 @@ final class PuniGame: ObservableObject {
             }
             for i in blobs[b].pos.indices {
                 let p = blobs[b].pos[i]
-                let velocity = (p - blobs[b].prev[i]) * 0.99
+                let velocity = (p - blobs[b].prev[i]) * 0.994
                 blobs[b].prev[i] = p
                 blobs[b].pos[i] = p + velocity + gravity
             }
@@ -340,13 +340,13 @@ final class PuniGame: ObservableObject {
             let j = (i + 1) % count
             let delta = blobs[b].pos[j] - blobs[b].pos[i]
             let length = max(simd_length(delta), 0.0001)
-            let correction = delta * ((length - edge) / length * 0.5 * 0.9)
+            let correction = delta * ((length - edge) / length * 0.5 * 0.35)
             blobs[b].pos[i] += correction
             blobs[b].pos[j] -= correction
             let k = (i + 2) % count
             let delta2 = blobs[b].pos[k] - blobs[b].pos[i]
             let length2 = max(simd_length(delta2), 0.0001)
-            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.08)
+            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.02)
             blobs[b].pos[i] += correction2
             blobs[b].pos[k] -= correction2
         }
@@ -362,7 +362,7 @@ final class PuniGame: ObservableObject {
             sum += simd_length_squared(gradient)
         }
         guard sum > 0.0001 else { return }
-        let lambda = (blobs[b].area - current) / sum * 0.9
+        let lambda = (blobs[b].area - current) / sum * 0.4
         for i in 0..<count { blobs[b].pos[i] += gradients[i] * lambda }
     }
 
@@ -372,12 +372,11 @@ final class PuniGame: ObservableObject {
         let count = blobs.count
         for a in 0..<count {
             for b in (a + 1)..<count {
-                guard blobs[a].queued == blobs[b].queued,
-                      blobs[a].maxX >= blobs[b].minX, blobs[b].maxX >= blobs[a].minX,
+                guard blobs[a].maxX >= blobs[b].minX, blobs[b].maxX >= blobs[a].minX,
                       blobs[a].maxY >= blobs[b].minY, blobs[b].maxY >= blobs[a].minY else { continue }
                 let hitA = push(points: a, into: b)
                 let hitB = push(points: b, into: a)
-                if record, hitA || hitB, !blobs[a].queued, blobs[a].level == blobs[b].level, blobs[a].age > 0.15, blobs[b].age > 0.15 {
+                if record, hitA || hitB, blobs[a].level == blobs[b].level, blobs[a].age > 0.15, blobs[b].age > 0.15 {
                     list.append((a, b))
                 }
             }
@@ -419,7 +418,7 @@ final class PuniGame: ObservableObject {
             blobs[a].pos[i] += move * 0.5
             // 押されている点は少しすべりにくく（止まったあとにぷるぷる震え続けないように）
             let previous = blobs[a].prev[i]
-            blobs[a].prev[i] = previous + (blobs[a].pos[i] - previous) * 0.2
+            blobs[a].prev[i] = previous + (blobs[a].pos[i] - previous) * 0.08
             let next = (bestEdge + 1) % countB
             blobs[b].pos[bestEdge] -= move * 0.5 * (1 - bestT)
             blobs[b].pos[next] -= move * 0.5 * bestT
@@ -516,6 +515,8 @@ final class PuniGame: ObservableObject {
             var blob = Blob(id: nextID, level: level, pos: points, prev: points, area: areaA + areaB, targetArea: area(level))
             blob.age = 0.05
             blob.flash = 1
+            // 列の玉にぶつけてくっついたら、そのまま列（筒）の中に残る
+            blob.queued = first.queued || second.queued
             // 点数：生まれた玉の数字
             score += blob.value
             nextID += 1
