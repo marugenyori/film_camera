@@ -29,10 +29,17 @@ jobs:
   # ------------------------------------------------------------
   build:
     name: ビルド確認（署名なし）
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+
+      - name: Xcode 26 を選ぶ
+        # macOS 26 の Mac が混んで割り当てられないことがあるので、macOS 15 の Mac に入っている Xcode 26 のいちばん新しいものを使う
+        run: |
+          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -v beta | sort -V | tail -1)
+          if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
+          xcodebuild -version
 
       - name: Xcode のバージョン
         run: |
@@ -91,7 +98,7 @@ jobs:
     name: TestFlight にアップロード
     needs: build
     if: github.event_name == 'workflow_dispatch' && inputs.testflight
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -100,6 +107,13 @@ jobs:
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Xcode 26 を選ぶ
+        # macOS 26 の Mac が混んで割り当てられないことがあるので、macOS 15 の Mac に入っている Xcode 26 のいちばん新しいものを使う
+        run: |
+          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -v beta | sort -V | tail -1)
+          if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
+          xcodebuild -version
 
       - name: Secrets の確認
         env:
