@@ -39,9 +39,14 @@ jobs:
         run: |
           X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -v beta | sort -V | tail -1)
           if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
+          # はじめて使う Xcode の準備（ここを済ませないと xcodebuild が固まることがある）
+          sudo xcodebuild -runFirstLaunch || true
           xcodebuild -version
 
       - name: Xcode のバージョン
+        # まれに Mac の中でここが固まることがあるので、上限を付けて、だめでも先へ進む
+        timeout-minutes: 4
+        continue-on-error: true
         run: |
           xcodebuild -version
           xcodebuild -list -project FilmCamera.xcodeproj
@@ -113,6 +118,8 @@ jobs:
         run: |
           X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -v beta | sort -V | tail -1)
           if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
+          # はじめて使う Xcode の準備（ここを済ませないと xcodebuild が固まることがある）
+          sudo xcodebuild -runFirstLaunch || true
           xcodebuild -version
 
       - name: Secrets の確認
