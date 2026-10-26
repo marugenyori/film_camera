@@ -120,7 +120,7 @@
 
 ## ビルドと配信
 
-- ビルドは macOS 15 の Mac（`runs-on: macos-15`）で、入っている Xcode 26 のいちばん新しいものを選んで使う（2026年10月、macOS 26 の Mac が混んで割り当てられず「The job was not acquired by Runner」で何度も打ち切られたため変えた）
+- ビルドは Intel の Mac（`runs-on: macos-26-intel`）で、入っている Xcode 26 のいちばん新しいものを選んで使う（2026年10月、Apple シリコンの Mac（macos-26・macos-15）が混んで割り当てられず「The job was not acquired by Runner」で何度も打ち切られたため変えた。空いたら macos-26 に戻してよい）
 
 - `main` に push すると、署名なしのシミュレータ向けビルドが自動で走る（エラーは実行結果ページの「ビルド結果」にまとまる）
 - シミュレータにはカメラがないので「カメラが見つかりません」と出る。見え方の確認は実機（TestFlight）で行う
