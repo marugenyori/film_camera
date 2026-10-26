@@ -109,6 +109,14 @@ final class PuniGame: ObservableObject {
     private(set) var height: Float = 360
     /// 上の線の危なさ（0〜1）
     private(set) var danger: Double = 0
+    /// 左右のゲージ（左右の半円に玉が触れている間たまる。両方いっぱいでゲームオーバー）
+    private(set) var leftGauge: Double = 0
+    private(set) var rightGauge: Double = 0
+    /// このコマで左右の半円に触れたか
+    private(set) var touchingLeft = false
+    private(set) var touchingRight = false
+    private var touchLeftNow = false
+    private var touchRightNow = false
     private var nextID = 0
     /// 点数の増え（右上に「+16」と出す）
     struct Gain: Identifiable {
@@ -170,6 +178,8 @@ final class PuniGame: ObservableObject {
         combo = 0
         biggest = 0
         danger = 0
+        leftGauge = 0
+        rightGauge = 0
         gameOver = false
         frame += 1
     }
@@ -461,9 +471,13 @@ final class PuniGame: ObservableObject {
                 p += Vec(-1, -1) * (-right / 2)
                 touched = true
             }
-            for bumper in [bumperL, bumperR] {
+            for (side, bumper) in [bumperL, bumperR].enumerated() {
                 let offset = p - bumper
                 let distance = simd_length(offset)
+                // 少し手前（ふちから 1.5）までを「触れた」とみなす
+                if distance < radius + 1.5, !blobs[b].queued, blobs[b].age > 0.3 {
+                    if side == 0 { touchLeftNow = true } else { touchRightNow = true }
+                }
                 if distance < radius, distance > 0.0001 {
                     p = bumper + offset / distance * radius
                     touched = true
@@ -554,11 +568,17 @@ final class PuniGame: ObservableObject {
         GameAudio.shared.play(.win)
     }
 
+    /// 左右の半円に玉が触れている間、その側のゲージがたまる（6 秒でいっぱい。触れていないときは少しずつ戻る）。
+    /// 両方いっぱいになったらゲームオーバー
     private func checkDanger(_ dt: Double) {
-        // 左右の半円の出っぱりより上まで積み上がると危ない（2 秒で終わり）
-        let over = blobs.contains { !$0.queued && $0.age > 1.5 && $0.minY < bumperY }
-        danger = over ? min(danger + dt / 2, 1) : max(0, danger - dt / 2)
-        if danger >= 1 {
+        touchingLeft = touchLeftNow
+        touchingRight = touchRightNow
+        touchLeftNow = false
+        touchRightNow = false
+        leftGauge = touchingLeft ? min(leftGauge + dt / 6, 1) : max(0, leftGauge - dt / 40)
+        rightGauge = touchingRight ? min(rightGauge + dt / 6, 1) : max(0, rightGauge - dt / 40)
+        danger = min(leftGauge, rightGauge)
+        if leftGauge >= 1, rightGauge >= 1 {
             gameOver = true
             GameAudio.shared.play(.lose)
         }

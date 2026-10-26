@@ -162,7 +162,7 @@ struct PuniGameView: View {
         ZStack {
             Color.black.opacity(0.6).ignoresSafeArea()
             VStack(spacing: 12) {
-                Text("あふれた！")
+                Text("ゲームオーバー")
                     .font(.system(size: 28, weight: .black, design: .rounded))
                 Text("\(game.score)")
                     .font(.system(size: 56, weight: .black, design: .rounded).monospacedDigit())
@@ -252,25 +252,29 @@ private struct PuniBoard: View {
         context.fill(hole, with: .color(.black))
         // 左右の半円の出っぱりと、わくのみぞ
         let by = inner.minY + CGFloat(game.bumperY), radius = CGFloat(game.bumperRadius)
-        for x in [inner.minX, inner.maxX] {
+        for (side, x) in [inner.minX, inner.maxX].enumerated() {
             context.fill(Path(ellipseIn: CGRect(x: x - radius, y: by - radius, width: radius * 2, height: radius * 2)),
                          with: .color(Color(white: 0.27)))
-            // 積み上がって危ないと、赤く点滅する（ここを越えると終わり）
-            let warn = game.danger > 0 && Int(Date().timeIntervalSinceReferenceDate * 6) % 2 == 0
+            // 玉が触れている間は点滅する（その側のゲージがたまっていく）
+            let touching = side == 0 ? game.touchingLeft : game.touchingRight
+            let warn = touching && Int(Date().timeIntervalSinceReferenceDate * 6) % 2 == 0
             context.fill(Path(ellipseIn: CGRect(x: x - radius * 0.8, y: by - radius * 0.8, width: radius * 1.6, height: radius * 1.6)),
                          with: .color(warn ? Color(red: 0.9, green: 0.25, blue: 0.25) : Color(white: 0.4)))
             context.fill(Path(roundedRect: CGRect(x: x - 2.5, y: by - radius * 1.6, width: 5, height: radius * 3.2), cornerRadius: 2.5),
                          with: .color(Color(white: 0.12)))
         }
-        // 上の 2 本の棒：次の玉が列に入ってくるまでの時間（外から内へ白い部分が伸びる）
+        // 上の 2 本の棒：左右のゲージ（その側の半円に玉が触れている間、外から内へたまる。両方いっぱいで終わり）
         let barY = inner.minY * 0.42, barH = max(4, inner.minY * 0.24)
-        let danger = CGFloat(game.queueCount) / 4
         for (start, end, fromRight) in [(size.width * 0.06, size.width * 0.42, false), (size.width * 0.58, size.width * 0.94, true)] {
+            let gauge = CGFloat(fromRight ? game.rightGauge : game.leftGauge)
             let track = CGRect(x: start, y: barY - barH / 2, width: end - start, height: barH)
             context.fill(Path(roundedRect: track, cornerRadius: barH / 2), with: .color(Color(white: 0.12)))
-            let fill = max(0.04, danger) * track.width
+            guard gauge > 0.005 else { continue }
+            let fill = max(barH, gauge * track.width)
             let lit = CGRect(x: fromRight ? track.maxX - fill : track.minX, y: track.minY, width: fill, height: barH)
-            context.fill(Path(roundedRect: lit, cornerRadius: barH / 2), with: .color(Color(white: 0.42)))
+            let full = gauge >= 0.999
+            context.fill(Path(roundedRect: lit, cornerRadius: barH / 2),
+                         with: .color(full ? Color(red: 0.95, green: 0.3, blue: 0.3) : Color(white: 0.45 + 0.4 * gauge)))
         }
         // 上のふちの小さな点（列の玉の場所）
         for item in game.queueLayout() {
