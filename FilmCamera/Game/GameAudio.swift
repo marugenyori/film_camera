@@ -103,6 +103,8 @@ final class GameAudio {
 
     enum Effect {
         case tap, place, swap, invalid, pop(combo: Int), special, bomb, win, lose, complete
+        /// ぷにゅっ：やわらかい玉がくっつく音（大きい玉ほど低く、続けてくっつくほど少し高く）
+        case squish(level: Int, combo: Int)
     }
 
     func play(_ effect: Effect) {
@@ -110,6 +112,20 @@ final class GameAudio {
         var add: [Voice] = []
         let sr = sampleRate
         switch effect {
+        case .squish(let level, let combo):
+            medium.impactOccurred(intensity: min(0.5 + Double(level) * 0.04, 1))
+            let base = midi(82 - Double(min(level, 12)) * 2.2 + Double(min(max(combo - 1, 0), 6)) * 1.5)
+            // 「ぽ」：やわらかい低い音が沈む
+            add.append(Voice(sr, f0: base * 0.42, f1: base * 0.28, length: 0.18, wave: .sine, volume: 0.34, decay: 4, attack: 0.004))
+            // 「にゅ」：水の粒のように音程が上がる
+            add.append(Voice(sr, f0: base * 0.75, f1: base * 1.7, length: 0.12, wave: .sine, volume: 0.24, delay: 0.012, decay: 3,
+                             attack: 0.006))
+            add.append(Voice(sr, f0: base * 1.5, f1: base * 2.6, length: 0.09, wave: .triangle, volume: 0.06, delay: 0.025, decay: 4,
+                             filter: 0.5))
+            if combo >= 2 {
+                // 続けてくっつくと、きらっと小さな鈴
+                add.append(Voice(sr, f0: base * 3, length: 0.25, wave: .bell, volume: 0.05, delay: 0.05, decay: 5))
+            }
         case .tap:
             light.impactOccurred(intensity: 0.5)
             add += Voice.click(sr, volume: 0.25)

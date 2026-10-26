@@ -139,7 +139,7 @@ final class PuniGame: ObservableObject {
     // MARK: - 形と大きさ
 
     /// 次の玉が並ぶ高さ・撃ち出す高さ
-    var queueY: Float { height * 0.12 }
+    var queueY: Float { width * 0.15 }
     /// これより上に玉が積み上がると危ない
     var dangerY: Float { height * 0.2 }
     /// 下の角を斜めに切る大きさ
@@ -149,7 +149,7 @@ final class PuniGame: ObservableObject {
     var bumperRadius: Float { width * 0.065 }
 
     /// 数字の玉の半径（面積は数字の 0.42 乗に比例して大きくなる）
-    func radius(_ level: Int) -> Float { width * 0.054 * pow(2, Float(level) * 0.209) }
+    func radius(_ level: Int) -> Float { width * 0.068 * pow(2, Float(level) * 0.209) }
     func area(_ level: Int) -> Float { let r = radius(level); return .pi * r * r }
     /// まわりの点の数（大きい玉ほど多い）
     func pointCount(_ level: Int) -> Int { min(max(Int(radius(level) * 2 * .pi / (width * 0.032)), 10), 30) }
@@ -197,7 +197,7 @@ final class PuniGame: ObservableObject {
     /// 列の玉を押さえている間は、新しい玉を入れない
     var holding = false
     /// 筒の太さ（列の玉はこの高さにつぶれて、横に長くなる）
-    var queueHeight: Float { width * 0.095 }
+    var queueHeight: Float { width * 0.115 }
     var queueCount: Int { blobs.reduce(0) { $0 + ($1.queued ? 1 : 0) } }
 
     /// 列の玉（左から順）：id・数字の段階・横の位置
@@ -324,7 +324,7 @@ final class PuniGame: ObservableObject {
             }
             for i in blobs[b].pos.indices {
                 let p = blobs[b].pos[i]
-                let velocity = (p - blobs[b].prev[i]) * 0.994
+                let velocity = (p - blobs[b].prev[i]) * 0.995
                 blobs[b].prev[i] = p
                 blobs[b].pos[i] = p + velocity + gravity
             }
@@ -350,13 +350,13 @@ final class PuniGame: ObservableObject {
             let j = (i + 1) % count
             let delta = blobs[b].pos[j] - blobs[b].pos[i]
             let length = max(simd_length(delta), 0.0001)
-            let correction = delta * ((length - edge) / length * 0.5 * 0.35)
+            let correction = delta * ((length - edge) / length * 0.5 * 0.25)
             blobs[b].pos[i] += correction
             blobs[b].pos[j] -= correction
             let k = (i + 2) % count
             let delta2 = blobs[b].pos[k] - blobs[b].pos[i]
             let length2 = max(simd_length(delta2), 0.0001)
-            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.02)
+            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.015)
             blobs[b].pos[i] += correction2
             blobs[b].pos[k] -= correction2
         }
@@ -372,8 +372,23 @@ final class PuniGame: ObservableObject {
             sum += simd_length_squared(gradient)
         }
         guard sum > 0.0001 else { return }
-        let lambda = (blobs[b].area - current) / sum * 0.4
+        let lambda = (blobs[b].area - current) / sum * 0.3
         for i in 0..<count { blobs[b].pos[i] += gradients[i] * lambda }
+        // 形を丸に戻す弱い力（回転に合わせた丸へ少しだけ寄せる）。ねじれや、こぶが残らないようにする。弱いのでぶよぶよはそのまま
+        let center = blobs[b].center
+        var dotSum: Float = 0, crossSum: Float = 0
+        for i in 0..<count {
+            let angle = Float(i) / Float(count) * 2 * .pi
+            let q = blobs[b].pos[i] - center
+            dotSum += cos(angle) * q.x + sin(angle) * q.y
+            crossSum += cos(angle) * q.y - sin(angle) * q.x
+        }
+        let turn = atan2(crossSum, dotSum)
+        for i in 0..<count {
+            let angle = Float(i) / Float(count) * 2 * .pi + turn
+            let target = center + Vec(cos(angle), sin(angle)) * radius
+            blobs[b].pos[i] += (target - blobs[b].pos[i]) * 0.025
+        }
     }
 
     /// 玉どうし：相手の中に入った点を、相手のいちばん近いふちまで押しもどす（相手のふちも半分押す）
@@ -457,6 +472,7 @@ final class PuniGame: ObservableObject {
             var p = blobs[b].pos[i]
             var touched = false
             if p.x < 0 { p.x = 0; touched = true }
+            if p.y < 0 { p.y = 0; touched = true }
             if p.x > w { p.x = w; touched = true }
             if p.y > h { p.y = h; touched = true }
             // 左下の斜め：x - y >= c - h
@@ -507,26 +523,20 @@ final class PuniGame: ObservableObject {
             let areaA = max(first.currentArea, 1), areaB = max(second.currentArea, 1)
             let center = (first.center * areaA + second.center * areaB) / (areaA + areaB)
             let level = first.level + 1
-            // 2 つの玉を合わせた外形を、中心から見た角度ごとに測って、新しい玉の形にする（まわりに食いこまない）
+            // 大きいほうの玉の大きさの丸から始めて、本来の大きさへふくらむ（形がくずれない）
             let count = pointCount(level)
-            let all = first.pos + second.pos
-            var radii = [Float](repeating: 0, count: count)
-            for p in all {
-                let offset = p - center
-                var angle = atan2(offset.y, offset.x)
-                if angle < 0 { angle += 2 * .pi }
-                let slot = Int((angle / (2 * .pi) * Float(count)).rounded()) % count
-                radii[slot] = max(radii[slot], simd_length(offset))
-            }
-            let average = radii.filter { $0 > 0 }.reduce(0, +) / Float(max(radii.filter { $0 > 0 }.count, 1))
+            let start = sqrt(max(areaA, areaB) / .pi)
             var points: [Vec] = []
+            var previous: [Vec] = []
             for index in 0..<count {
                 let angle = Float(index) / Float(count) * 2 * .pi
-                let r = radii[index] > 0 ? radii[index] : average
-                points.append(center + Vec(cos(angle), sin(angle)) * r)
+                let direction = Vec(cos(angle), sin(angle))
+                points.append(center + direction * start)
+                // ぷるんと外へはずむ
+                previous.append(center + direction * (start - width * 0.004))
             }
             nextID += 1
-            var blob = Blob(id: nextID, level: level, pos: points, prev: points, area: areaA + areaB, targetArea: area(level))
+            var blob = Blob(id: nextID, level: level, pos: points, prev: previous, area: max(areaA, areaB), targetArea: area(level))
             blob.age = 0.05
             blob.flash = 1
             // 列の玉にぶつけてくっついたら、そのまま列（筒）の中に残る
@@ -543,7 +553,7 @@ final class PuniGame: ObservableObject {
             born.append(blob)
             biggest = max(biggest, level)
             haptic.impactOccurred(intensity: min(0.4 + CGFloat(level) * 0.05, 1))
-            GameAudio.shared.play(.pop(combo: min(level / 2 + 1, 6)))
+            GameAudio.shared.play(.squish(level: level, combo: combo))
             unlock(level: level)
         }
         blobs = blobs.enumerated().filter { !removed.contains($0.offset) }.map(\.element) + born
