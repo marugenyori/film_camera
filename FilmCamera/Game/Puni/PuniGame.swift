@@ -139,7 +139,7 @@ final class PuniGame: ObservableObject {
     // MARK: - 形と大きさ
 
     /// 次の玉が並ぶ高さ・撃ち出す高さ
-    var queueY: Float { width * 0.15 }
+    var queueY: Float { width * 0.2 }
     /// これより上に玉が積み上がると危ない
     var dangerY: Float { height * 0.2 }
     /// 下の角を斜めに切る大きさ
