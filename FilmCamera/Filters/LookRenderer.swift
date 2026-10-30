@@ -42,6 +42,7 @@ enum LookRenderer {
         case .double: out = multiple(image, overlays: options.overlays,
                                      total: options.exposureTotal, seed: options.grainSeed)
         case .contact: out = contactSheet(image, options: options)
+        case .cinema: out = cinema(image, fromRaw: options.fromRaw, seed: options.grainSeed)
         }
         if options.dateStamp { out = stamp(date, on: out) }
         return out
@@ -192,6 +193,82 @@ enum LookRenderer {
         // 粒子は画質が落ちて見えるため入れない（`grain` は残してある）
         let grained = diffusion(toned, radius: longSide(extent) * 0.006, amount: 0.10)
         return toLinear(vignette(detail(grained), strength: 0.28, inner: 0.42))
+    }
+
+    // MARK: - シネマ（RAW から現像する映画フィルム風）
+
+    /// 光の量に比例した明るさ（RAW を現像しただけの像）に、映画フィルムのような処理をかける。
+    /// 1. 白を超える明るい光のまわりに赤橙のにじみ（ハレーション：フィルムの裏で光が跳ね返ってできる）
+    /// 2. 暗部はなめらかに沈み、明るい部分は白飛びせずゆっくり白に近づく階調（3D の色の表 = LUT でかける）
+    /// 3. 中間の明るさほど目立つ粒子と、弱い周辺減光
+    private static func cinema(_ image: CIImage, fromRaw: Bool, seed: CGPoint) -> CIImage {
+        let extent = image.extent
+        let haloed = halation(image, threshold: fromRaw ? 1.0 : 0.85, amount: 0.45)
+
+        // LUT は 0〜1 の入力しか扱えないので、0〜8 の明るさを 1/2.4 乗で 0〜1 に詰めてから引く
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = haloed
+        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+        clamp.maxComponents = CIVector(x: CinemaLUT.range, y: CinemaLUT.range, z: CinemaLUT.range, w: 1)
+        let scaled = colorMatrix(clamp.outputImage ?? haloed,
+                                 r: 1 / CinemaLUT.range, g: 1 / CinemaLUT.range, b: 1 / CinemaLUT.range,
+                                 bias: (0, 0, 0))
+        let gamma = CIFilter.gammaAdjust()
+        gamma.inputImage = scaled
+        gamma.power = Float(1 / CinemaLUT.encodingGamma)
+
+        let cube = CIFilter.colorCube()
+        cube.inputImage = gamma.outputImage ?? scaled
+        cube.cubeDimension = Float(CinemaLUT.size)
+        cube.cubeData = fromRaw ? CinemaLUT.raw : CinemaLUT.processed
+        let graded = (cube.outputImage ?? image).cropped(to: extent)
+
+        let grained = grain(toSRGB(graded), amount: 0.055, seed: seed)
+        return toLinear(vignette(grained, strength: 0.16, inner: 0.5))
+    }
+
+    /// 明るい部分だけを取り出してぼかし、赤橙に色を付けて足す（光の量のまま足すので、強い光ほど広くにじむ）
+    private static func halation(_ image: CIImage, threshold: CGFloat, amount: CGFloat) -> CIImage {
+        let extent = image.extent
+        // 明るさ（輝度）から threshold を引いた分だけ残す
+        let luma = CIFilter.colorMatrix()
+        luma.inputImage = image
+        let weights = CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0)
+        luma.rVector = weights
+        luma.gVector = weights
+        luma.bVector = weights
+        luma.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        luma.biasVector = CIVector(x: -threshold, y: -threshold, z: -threshold, w: 0)
+        let positive = CIFilter.colorClamp()
+        positive.inputImage = luma.outputImage
+        positive.minComponents = CIVector(x: 0, y: 0, z: 0, w: 1)
+        positive.maxComponents = CIVector(x: 16, y: 16, z: 16, w: 1)
+        guard let bright = positive.outputImage else { return image }
+
+        // 狭いにじみと広いにじみを重ねる
+        let long = longSide(extent)
+        let near = bright.clampedToExtent().applyingGaussianBlur(sigma: Double(long * 0.004))
+        let far = bright.clampedToExtent().applyingGaussianBlur(sigma: Double(long * 0.014))
+        let add = CIFilter.additionCompositing()
+        add.inputImage = glowTint(near, r: amount * 0.9, g: amount * 0.22, b: amount * 0.06)
+        add.backgroundImage = glowTint(far, r: amount * 0.5, g: amount * 0.10, b: amount * 0.02)
+        guard let glow = add.outputImage?.cropped(to: extent) else { return image }
+
+        let sum = CIFilter.additionCompositing()
+        sum.inputImage = glow
+        sum.backgroundImage = image
+        return (sum.outputImage ?? image).cropped(to: extent)
+    }
+
+    /// にじみに色を付ける。足し合わせても不透明度が 1 を超えないよう、不透明度は 0 にする
+    private static func glowTint(_ image: CIImage, r: CGFloat, g: CGFloat, b: CGFloat) -> CIImage {
+        let m = CIFilter.colorMatrix()
+        m.inputImage = image
+        m.rVector = CIVector(x: r, y: 0, z: 0, w: 0)
+        m.gVector = CIVector(x: g, y: 0, z: 0, w: 0)
+        m.bVector = CIVector(x: b, y: 0, z: 0, w: 0)
+        m.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        return m.outputImage ?? image
     }
 
     // MARK: - フラッシュ風（2000年代のコンデジの直射フラッシュ）

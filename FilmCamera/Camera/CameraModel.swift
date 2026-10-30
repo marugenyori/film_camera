@@ -47,7 +47,11 @@ final class CameraModel: NSObject, ObservableObject {
     @Published var mode: LookMode {
         didSet {
             UserDefaults.standard.set(mode.rawValue, forKey: "mode")
-            if mode.usesDepth != oldValue.usesDepth { updateDepth() }
+            if mode.usesDepth != oldValue.usesDepth || mode.usesRaw != oldValue.usesRaw {
+                let raw = mode.usesRaw
+                sessionQueue.async { self.wantsRawCamera = raw }
+                updateDepth()
+            }
             if mode != .double { discardExposures() }
         }
     }
@@ -192,6 +196,11 @@ final class CameraModel: NSObject, ObservableObject {
     private var lastInterruption: String?
     /// デュアルカメラで映像が届かなかったので、広角カメラだけを使っているか
     private var useSimpleCamera = false
+    /// RAW で撮るモード中か（sessionQueue で使う）。RAW はレンズを自動で切り替えるカメラでは撮れないので、
+    /// 広角カメラだけを使う
+    private var wantsRawCamera = false
+    /// RAW で撮れないことを知らせたか
+    private var toldRawUnavailable = false
     private var _latestFrontFrame: CIImage?
     /// 前後同時撮影を始めてから届いたコマの数（映像が来ているかの確認用）
     private var _dualFrameCount = 0
@@ -381,8 +390,10 @@ final class CameraModel: NSObject, ObservableObject {
     private func startSession() {
         let position = self.position
         let wantDepth = mode.usesDepth
+        let wantRaw = mode.usesRaw
         let dualOn = isDual
         sessionQueue.async {
+            self.wantsRawCamera = wantRaw
             if !self.isConfigured {
                 self.isConfigured = self.configure(position: position, wantDepth: wantDepth)
             }
@@ -525,7 +536,7 @@ final class CameraModel: NSObject, ObservableObject {
             session.isMultitaskingCameraAccessEnabled = true
         }
 
-        guard let device = Self.camera(at: position, wantDepth: wantDepth),
+        guard let device = Self.camera(at: position, wantDepth: wantDepth, wantRaw: wantsRawCamera),
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else { return false }
         session.addInput(input)
@@ -785,7 +796,11 @@ final class CameraModel: NSObject, ObservableObject {
     /// 距離を使うときの背面は、距離を測れるカメラを優先する（LiDAR → デュアルカメラ → 広角）。
     /// それ以外の背面は、超広角（0.5×）までズームできるデュアルカメラを、
     /// 広角カメラと同じ大きさの写真が撮れるときだけ使う（画質を落とさないため）
-    private static func camera(at position: AVCaptureDevice.Position, wantDepth: Bool) -> AVCaptureDevice? {
+    private static func camera(at position: AVCaptureDevice.Position, wantDepth: Bool,
+                               wantRaw: Bool = false) -> AVCaptureDevice? {
+        if position == .back && !wantDepth && wantRaw {
+            return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+        }
         if position == .back && !wantDepth {
             let wide = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
             if let dual = AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: .back) {
@@ -827,7 +842,7 @@ final class CameraModel: NSObject, ObservableObject {
     private func useCamera(at position: AVCaptureDevice.Position, wantDepth: Bool) -> AVCaptureDevice? {
         let chosen = useSimpleCamera
             ? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
-            : Self.camera(at: position, wantDepth: wantDepth)
+            : Self.camera(at: position, wantDepth: wantDepth, wantRaw: wantsRawCamera)
         guard let device = chosen else {
             return videoInput?.device
         }
@@ -1053,8 +1068,23 @@ final class CameraModel: NSObject, ObservableObject {
                     connection.isVideoMirrored = mirrored
                 }
             }
-            let settings = AVCapturePhotoSettings()
-            if fast {
+            // RAW：iPhone の処理（ノイズ除去・合成・トーンカーブ）の前のセンサーのデータをもらう
+            let rawFormat = options.mode.usesRaw
+                ? self.photoOutput.availableRawPhotoPixelFormatTypes
+                    .first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) })
+                : nil
+            if options.mode.usesRaw && rawFormat == nil && !self.toldRawUnavailable {
+                self.toldRawUnavailable = true
+                DispatchQueue.main.async {
+                    self.message = "このカメラでは RAW で撮れないため、処理済みの写真から作ります"
+                }
+            }
+            let settings = rawFormat.map { AVCapturePhotoSettings(rawPixelFormatType: $0) }
+                ?? AVCapturePhotoSettings()
+            if rawFormat != nil {
+                // RAW は何枚もの合成ができないので、速さ優先にする（大きさはカメラの決まった大きさになる）
+                settings.photoQualityPrioritization = .speed
+            } else if fast {
                 settings.maxPhotoDimensions = self.fastPhotoDimensions()
                 settings.photoQualityPrioritization = .speed
             } else {
@@ -1068,8 +1098,8 @@ final class CameraModel: NSObject, ObservableObject {
                 settings.isDepthDataDeliveryEnabled = true
                 settings.embedsDepthDataInPhoto = false
             }
-            let processor = PhotoCaptureProcessor { [weak self] data, depth, distance in
-                self?.finishCapture(data: data, depth: depth, distance: distance,
+            let processor = PhotoCaptureProcessor { [weak self] data, depth, distance, isRaw in
+                self?.finishCapture(data: data, depth: depth, distance: distance, isRaw: isRaw,
                                     options: options, id: settings.uniqueID)
                 if borrowDepth {
                     // 撮り終わったら距離を測る設定に戻す（その間にモードが変わっていれば戻さない）
@@ -1131,9 +1161,16 @@ final class CameraModel: NSObject, ObservableObject {
         }
     }
 
-    private func finishCapture(data: Data?, depth: CIImage?, distance: CGFloat?,
+    private func finishCapture(data: Data?, depth: CIImage?, distance: CGFloat?, isRaw: Bool,
                                options: LookOptions, id: Int64) {
         sessionQueue.async { self.inFlight[id] = nil }
+
+        if isRaw, let data, let developed = Self.developRaw(data) {
+            var options = options
+            options.fromRaw = true
+            renderAndSave(developed, options: options)
+            return
+        }
 
         guard let data,
               let image = CIImage(data: data, options: [.applyOrientationProperty: true]) else {
@@ -1162,6 +1199,32 @@ final class CameraModel: NSObject, ObservableObject {
             options.contactTileLongSide = min(4000, tileLong)
         }
         renderAndSave(image, options: options)
+    }
+
+    /// RAW（DNG）を、トーンカーブや局所的な明るさ補正をかけずに現像する。
+    /// 出てくるのは光の量に比例した明るさで、白より明るい部分も 1 を超えた値として残る
+    private static func developRaw(_ data: Data) -> CIImage? {
+        guard let raw = CIRAWFilter(imageData: data, identifierHint: "com.adobe.raw-image") else { return nil }
+        raw.boostAmount = 0
+        raw.boostShadowAmount = 0
+        if raw.isLocalToneMapSupported { raw.localToneMapAmount = 0 }
+        // ノイズは少しだけ残し、粒子となじませる
+        if raw.isLuminanceNoiseReductionSupported {
+            raw.luminanceNoiseReductionAmount = min(raw.luminanceNoiseReductionAmount, 0.35)
+        }
+        guard let image = raw.outputImage else { return nil }
+        // 撮影日時やレンズの情報を引き継ぐ（RAW 専用の情報は外す）
+        var properties: [String: Any] = [:]
+        if let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let all = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any] {
+            for key in [kCGImagePropertyExifDictionary, kCGImagePropertyTIFFDictionary,
+                        kCGImagePropertyGPSDictionary, kCGImagePropertyExifAuxDictionary] {
+                if let value = all[key as String] { properties[key as String] = value }
+            }
+        }
+        return image
+            .transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+            .settingProperties(properties)
     }
 
     /// フィルタをかけて写真アプリに保存する
@@ -1376,9 +1439,10 @@ extension CameraModel: AVCaptureDepthDataOutputDelegate {
 // MARK: - 写真の受け取り役
 
 private final class PhotoCaptureProcessor: NSObject, AVCapturePhotoCaptureDelegate {
-    private let completion: (Data?, CIImage?, CGFloat?) -> Void
+    /// データ・距離・被写体までの距離・RAW（DNG）か
+    private let completion: (Data?, CIImage?, CGFloat?, Bool) -> Void
 
-    init(completion: @escaping (Data?, CIImage?, CGFloat?) -> Void) {
+    init(completion: @escaping (Data?, CIImage?, CGFloat?, Bool) -> Void) {
         self.completion = completion
     }
 
@@ -1386,7 +1450,7 @@ private final class PhotoCaptureProcessor: NSObject, AVCapturePhotoCaptureDelega
                      didFinishProcessingPhoto photo: AVCapturePhoto,
                      error: Error?) {
         guard error == nil else {
-            completion(nil, nil, nil)
+            completion(nil, nil, nil, false)
             return
         }
         // 写真と同じ向きにそろえた距離
@@ -1401,6 +1465,6 @@ private final class PhotoCaptureProcessor: NSObject, AVCapturePhotoCaptureDelega
             depth = measured.image
             distance = measured.subject
         }
-        completion(photo.fileDataRepresentation(), depth, distance)
+        completion(photo.fileDataRepresentation(), depth, distance, photo.isRawPhoto)
     }
 }

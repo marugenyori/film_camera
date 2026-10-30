@@ -16,7 +16,7 @@
 |---|---|
 | `FilmCamera/App/` | `@main` の App |
 | `FilmCamera/Camera/CameraModel.swift` | AVFoundation でカメラを動かす。映像フレームを `latestFrame` に置き、撮影した写真にフィルタをかけて写真アプリに保存する |
-| `FilmCamera/Filters/LookMode.swift` | モードの一覧（標準（フィルタなし）／フィルム／フラッシュ／暖フラッシュ／コンデジ／岩井俊二風／クロス／ハリネズミ／暖ハリネズミ／多重露光／分割）。距離を使うのはフラッシュと暖フラッシュ（`usesDepth`） |
+| `FilmCamera/Filters/LookMode.swift` | モードの一覧（標準（フィルタなし）／フィルム／フラッシュ／暖フラッシュ／コンデジ／岩井俊二風／クロス／ハリネズミ／暖ハリネズミ／多重露光／分割／シネマ）。距離を使うのはフラッシュと暖フラッシュ（`usesDepth`）、RAW で撮るのはシネマ（`usesRaw`） |
 | `FilmCamera/Filters/LookRenderer.swift` | 各モードの見え方（Core Image のフィルタの組み合わせ）。**プレビューと保存の両方で同じ関数を使う** |
 | `FilmCamera/Views/CameraPreview.swift` | MTKView（Metal）で、フィルタをかけた映像を毎秒30コマ描く |
 | `FilmCamera/Camera/DualCameraSession.swift` | 外カメラと内カメラを同時に動かす（`AVCaptureMultiCamSession`）。「前後同時」をオンにしている間だけ使う |
@@ -117,6 +117,11 @@
 - **フラッシュは距離を使う**：背面カメラは LiDAR → デュアルカメラ → 広角の順に選び、フラッシュモードのときだけ距離を測る設定（`applyFormat`）に切り替える。距離（m）は `latestDepth`／写真の `depthData` から `LookOptions.depth` に渡し、`flashFalloff` で「近いほど明るい」マスクにする。光の強さは画面中央の被写体までの距離（`subjectDistance`、中央 40% の中央値）に合わせ、そこから距離の 2 乗で弱める（固定の距離だと、2m 先の被写体が暗く沈んだ）。粗い距離は `CIEdgePreserveUpsample` で写真の輪郭に沿って拡大し、測れなかった所（0m）は光を当てない（白く飛んだ失敗があった）。距離が取れないときは中央を近いとみなす円形マスク
   - 距離を測れる設定は写真の最大解像度が下がる機種があるので、ほかのモードでは使わない
 - 新しいモードは `LookMode` に case を足し、`LookRenderer.apply` の switch に処理を足すだけでよい
+- **シネマ（RAW から現像）**：持ち主が Chromagraph Camera を見て「処理の前の RAW から作るモードも」と頼んだもの。Chromagraph の計算は公開されていないので、見た目は自作
+  - 撮影：`usesRaw` のモードでは、背面は広角カメラだけを使う（`wantsRawCamera`。レンズを切り替える仮想カメラでは Bayer RAW が撮れない）。`availableRawPhotoPixelFormatTypes` の Bayer 形式で RAW だけを撮る（速さ優先、大きさはカメラ任せで 1200万画素前後）。撮れない（内カメラなど）ときは処理済みの写真から作り、一度だけメッセージを出す
+  - 現像：`CameraModel.developRaw` で `CIRAWFilter`。`boostAmount = 0`・`localToneMapAmount = 0` で、iPhone のトーンカーブや HDR 風の補正をかけない光の量に比例した像にする（白より明るい部分も 1 超えで残る）。Exif などは DNG から引き継ぐ
+  - 見え方：`LookRenderer.cinema`。1 超えの明るい部分から赤橙のハレーション（狭い＋広いぼかしを足す）→ 0〜8 を 1/2.4 乗で詰めて `CinemaLUT`（64³ の 3D LUT、Swift で計算）で階調と色（ACES 近似の S 字、色ごと 65％＋明るさだけ 35％、明るい部分の色を薄く、影は青緑・明るい部分は暖かく、黒を少し浮かせる）→ 中間の明るさで目立つ粒子（soft light）と弱い周辺減光
+  - プレビュー・分割・前後同時は処理済みの映像なので `fromRaw = false`。白飛びした明るさを `x / (1 − 0.75x)` で推定で広げてから同じ LUT にかける
 
 ## ビルドと配信
 

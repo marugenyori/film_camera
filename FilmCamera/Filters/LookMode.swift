@@ -15,6 +15,8 @@ enum LookMode: String, CaseIterable, Identifiable {
     case warmHarinezumi
     case double
     case contact
+    /// RAW（iPhone の処理の前のデータ）から現像し、映画フィルムのような階調にする
+    case cinema
 
     var id: String { rawValue }
 
@@ -31,11 +33,15 @@ enum LookMode: String, CaseIterable, Identifiable {
         case .warmHarinezumi: return "暖ハリネズミ"
         case .double: return "多重露光"
         case .contact: return "分割"
+        case .cinema: return "シネマ"
         }
     }
 
     /// 距離（LiDAR など）を使うモードか
     var usesDepth: Bool { self == .flash || self == .warmFlash }
+
+    /// RAW で撮るモードか
+    var usesRaw: Bool { self == .cinema }
 
     var caption: String {
         switch self {
@@ -50,6 +56,7 @@ enum LookMode: String, CaseIterable, Identifiable {
         case .warmHarinezumi: return "トイデジ風：琥珀色・濃い青空・暗い四隅"
         case .double: return "何枚かを 1 枚に重ねる"
         case .contact: return "いくつものフィルタで同時に撮って1枚に"
+        case .cinema: return "RAW から現像：映画フィルムのような階調・赤いにじみ・粒子"
         }
     }
 }
@@ -77,6 +84,9 @@ struct LookOptions {
     var front: CIImage? = nil
     /// 粒子（グレイン）の模様をずらす量。毎フレーム変えると粒子が動いて見える
     var grainSeed: CGPoint = CGPoint(x: CGFloat.random(in: 0..<512), y: CGFloat.random(in: 0..<512))
+    /// RAW から現像した、トーンカーブのかかっていない（光の量に比例した）画像か。
+    /// false のときは iPhone が処理した写真・映像として、白飛びした明るさを推定で広げてから使う
+    var fromRaw = false
 }
 
 /// 分割の並べ方（横に何コマ × 縦に何コマ）
@@ -109,7 +119,7 @@ enum ContactLayout: String, CaseIterable, Identifiable {
     var title: String { "\(columns)×\(rows)" }
 
     /// 分割で選べるフィルタ（重ねたり分割したりするモードは除く）
-    static let selectableModes: [LookMode] = [.standard, .film, .flash, .warmFlash, .compact, .iwai, .cross, .harinezumi, .warmHarinezumi]
+    static let selectableModes: [LookMode] = [.standard, .film, .flash, .warmFlash, .compact, .iwai, .cross, .harinezumi, .warmHarinezumi, .cinema]
 
     static let defaultModes: [LookMode] = [.film, .flash, .iwai, .cross, .harinezumi, .warmHarinezumi,
                                            .warmFlash, .film, .iwai]
