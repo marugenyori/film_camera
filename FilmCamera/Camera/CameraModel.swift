@@ -382,6 +382,7 @@ final class CameraModel: NSObject, ObservableObject {
                 }
                 self.session.commitConfiguration()
                 self.refreshPhotoDepthDelivery()
+                self.prepareRawFormat()
                 if !self.session.isRunning { self.session.startRunning() }
             }
         }
@@ -402,6 +403,7 @@ final class CameraModel: NSObject, ObservableObject {
                 return
             }
             self.refreshPhotoDepthDelivery()
+            self.prepareRawFormat()
             if dualOn {
                 _ = self.dual.start()
             } else if !self.session.isRunning {
@@ -834,6 +836,57 @@ final class CameraModel: NSObject, ObservableObject {
             self.setUpConnections(for: device)
             self.session.commitConfiguration()
             self.refreshPhotoDepthDelivery()
+            self.prepareRawFormat()
+        }
+    }
+
+    /// Bayer RAW（センサーのそのままのデータ）で撮れる状態か（sessionQueue で使う）
+    private var canShootBayerRaw: Bool {
+        photoOutput.availableRawPhotoPixelFormatTypes.contains { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
+    }
+
+    /// RAW で撮るモードのとき、RAW で撮れる設定に切り替える。設定の確定後に sessionQueue で呼ぶ。
+    /// 写真がいちばん大きく撮れる設定（4800万画素など）は RAW が撮れないことがあるので、
+    /// 標準の写真の設定 → ほかの設定（写真の大きい順）の順に試し、RAW が撮れるようになったところで止める。
+    /// どれでも撮れなければ元の設定に戻し、ProRAW に対応していればそちらを使う
+    private func prepareRawFormat() {
+        guard let device = videoInput?.device else { return }
+        guard wantsRawCamera, device.position == .back else {
+            if photoOutput.isAppleProRAWEnabled { photoOutput.isAppleProRAWEnabled = false }
+            return
+        }
+        guard !canShootBayerRaw else { return }
+
+        session.beginConfiguration()
+        session.sessionPreset = .photo
+        session.commitConfiguration()
+
+        if !canShootBayerRaw {
+            let eightBit: Set<OSType> = [kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                                         kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
+            let candidates = device.formats
+                .filter { format in
+                    eightBit.contains(CMFormatDescriptionGetMediaSubType(format.formatDescription))
+                        && format.videoSupportedFrameRateRanges.contains { $0.maxFrameRate >= 30 }
+                        && Self.videoArea(format) <= 1920 * 1440
+                }
+                .sorted { Self.photoArea($0) > Self.photoArea($1) }
+            for format in candidates {
+                session.beginConfiguration()
+                _ = setFormat(format, depthFormat: nil, on: device)
+                session.commitConfiguration()
+                if canShootBayerRaw { break }
+            }
+        }
+
+        session.beginConfiguration()
+        if !canShootBayerRaw {
+            applyFormat(for: device, wantDepth: false)
+        }
+        setUpConnections(for: device)
+        session.commitConfiguration()
+        if !canShootBayerRaw && photoOutput.isAppleProRAWSupported {
+            photoOutput.isAppleProRAWEnabled = true
         }
     }
 
@@ -874,6 +927,7 @@ final class CameraModel: NSObject, ObservableObject {
             self.setUpConnections(for: active)
             self.session.commitConfiguration()
             self.refreshPhotoDepthDelivery()
+            self.prepareRawFormat()
             let now = active.position
             DispatchQueue.main.async {
                 self.position = now
@@ -1069,14 +1123,19 @@ final class CameraModel: NSObject, ObservableObject {
                 }
             }
             // RAW：iPhone の処理（ノイズ除去・合成・トーンカーブ）の前のセンサーのデータをもらう
+            // Bayer RAW がなければ ProRAW（iPhone が合成した RAW。Pro の機種だけ）を使う
+            let rawTypes = self.photoOutput.availableRawPhotoPixelFormatTypes
             let rawFormat = options.mode.usesRaw
-                ? self.photoOutput.availableRawPhotoPixelFormatTypes
-                    .first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) })
+                ? (rawTypes.first { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
+                    ?? rawTypes.first { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) })
                 : nil
             if options.mode.usesRaw && rawFormat == nil && !self.toldRawUnavailable {
                 self.toldRawUnavailable = true
+                // 原因を調べられるよう、カメラの種類と RAW の形式の数を出す
+                let device = self.videoInput?.device
+                let detail = "\(device?.deviceType.rawValue ?? "?") / RAW \(rawTypes.count)"
                 DispatchQueue.main.async {
-                    self.message = "このカメラでは RAW で撮れないため、処理済みの写真から作ります"
+                    self.message = "このカメラでは RAW で撮れないため、処理済みの写真から作ります（\(detail)）"
                 }
             }
             let settings = rawFormat.map { AVCapturePhotoSettings(rawPixelFormatType: $0) }

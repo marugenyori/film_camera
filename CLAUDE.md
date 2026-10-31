@@ -118,7 +118,7 @@
   - 距離を測れる設定は写真の最大解像度が下がる機種があるので、ほかのモードでは使わない
 - 新しいモードは `LookMode` に case を足し、`LookRenderer.apply` の switch に処理を足すだけでよい
 - **シネマ（RAW から現像）**：持ち主が Chromagraph Camera を見て「処理の前の RAW から作るモードも」と頼んだもの。Chromagraph の計算は公開されていないので、見た目は自作
-  - 撮影：`usesRaw` のモードでは、背面は広角カメラだけを使う（`wantsRawCamera`。レンズを切り替える仮想カメラでは Bayer RAW が撮れない）。`availableRawPhotoPixelFormatTypes` の Bayer 形式で RAW だけを撮る（速さ優先、大きさはカメラ任せで 1200万画素前後）。撮れない（内カメラなど）ときは処理済みの写真から作り、一度だけメッセージを出す
+  - 撮影：`usesRaw` のモードでは、背面は広角カメラだけを使う（`wantsRawCamera`。レンズを切り替える仮想カメラでは Bayer RAW が撮れない）。`availableRawPhotoPixelFormatTypes` の Bayer 形式で RAW だけを撮る（速さ優先、大きさはカメラ任せで 1200万画素前後）。写真がいちばん大きく撮れる設定では Bayer RAW が撮れず「RAW で撮れない」と出たため、`prepareRawFormat` で標準の `.photo` → ほかの設定（写真の大きい順）を試して RAW が撮れる設定に切り替える。どれでもだめなら元に戻し、ProRAW に対応していればそれを使う。それでも撮れない（内カメラなど）ときは処理済みの写真から作り、一度だけメッセージ（カメラの種類と RAW の形式の数つき）を出す
   - 現像：`CameraModel.developRaw` で `CIRAWFilter`。`boostAmount = 0`・`localToneMapAmount = 0` で、iPhone のトーンカーブや HDR 風の補正をかけない光の量に比例した像にする（白より明るい部分も 1 超えで残る）。Exif などは DNG から引き継ぐ
   - 見え方：`LookRenderer.cinema`。1 超えの明るい部分から赤橙のハレーション（狭い＋広いぼかしを足す）→ 0〜8 を 1/2.4 乗で詰めて `CinemaLUT`（64³ の 3D LUT、Swift で計算）で階調と色（ACES 近似の S 字、色ごと 65％＋明るさだけ 35％、明るい部分の色を薄く、影は青緑・明るい部分は暖かく、黒を少し浮かせる）→ 中間の明るさで目立つ粒子（soft light）と弱い周辺減光
   - プレビュー・分割・前後同時は処理済みの映像なので `fromRaw = false`。白飛びした明るさを `x / (1 − 0.75x)` で推定で広げてから同じ LUT にかける
