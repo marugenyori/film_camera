@@ -141,7 +141,7 @@ final class PuniGame: ObservableObject {
     // MARK: - 形と大きさ
 
     /// 次の玉が並ぶ高さ・撃ち出す高さ
-    var queueY: Float { width * 0.2 }
+    var queueY: Float { width * 0.24 }
     /// これより上に玉が積み上がると危ない
     var dangerY: Float { height * 0.2 }
     /// 下の角を斜めに切る大きさ
@@ -326,7 +326,7 @@ final class PuniGame: ObservableObject {
             }
             for i in blobs[b].pos.indices {
                 let p = blobs[b].pos[i]
-                let velocity = (p - blobs[b].prev[i]) * 0.995
+                let velocity = (p - blobs[b].prev[i]) * 0.996
                 blobs[b].prev[i] = p
                 blobs[b].pos[i] = p + velocity + gravity
             }
@@ -352,13 +352,13 @@ final class PuniGame: ObservableObject {
             let j = (i + 1) % count
             let delta = blobs[b].pos[j] - blobs[b].pos[i]
             let length = max(simd_length(delta), 0.0001)
-            let correction = delta * ((length - edge) / length * 0.5 * 0.25)
+            let correction = delta * ((length - edge) / length * 0.5 * 0.15)
             blobs[b].pos[i] += correction
             blobs[b].pos[j] -= correction
             let k = (i + 2) % count
             let delta2 = blobs[b].pos[k] - blobs[b].pos[i]
             let length2 = max(simd_length(delta2), 0.0001)
-            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.015)
+            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.008)
             blobs[b].pos[i] += correction2
             blobs[b].pos[k] -= correction2
         }
@@ -374,7 +374,7 @@ final class PuniGame: ObservableObject {
             sum += simd_length_squared(gradient)
         }
         guard sum > 0.0001 else { return }
-        let lambda = (blobs[b].area - current) / sum * 0.3
+        let lambda = (blobs[b].area - current) / sum * 0.22
         for i in 0..<count { blobs[b].pos[i] += gradients[i] * lambda }
         // 形を丸に戻す弱い力（回転に合わせた丸へ少しだけ寄せる）。ねじれや、こぶが残らないようにする。弱いのでぶよぶよはそのまま
         let center = blobs[b].center
@@ -389,7 +389,7 @@ final class PuniGame: ObservableObject {
         for i in 0..<count {
             let angle = Float(i) / Float(count) * 2 * .pi + turn
             let target = center + Vec(cos(angle), sin(angle)) * radius
-            blobs[b].pos[i] += (target - blobs[b].pos[i]) * 0.025
+            blobs[b].pos[i] += (target - blobs[b].pos[i]) * 0.015
         }
     }
 
