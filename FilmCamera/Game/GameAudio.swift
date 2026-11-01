@@ -103,8 +103,19 @@ final class GameAudio {
 
     enum Effect {
         case tap, place, swap, invalid, pop(combo: Int), special, bomb, win, lose, complete
-        /// ぷにゅっ：やわらかい玉がくっつく音（大きい玉ほど低く、続けてくっつくほど少し高く）
-        case squish(level: Int, combo: Int)
+        /// ぷにぷにシューター（本家 sobosuba の体験版の音を測って、似せて作ったもの）
+        /// くっつく：ポ・ポ・ポーンと上がる 3 つのやわらかい音（ミ・ソ#・シ）。大きい玉ほど低く、少し大きく
+        case puniMerge(level: Int)
+        /// 撃つ：水滴が落ちるような「ぽこっ」
+        case puniLaunch
+        /// 玉をつかむ：小さく軽い音
+        case puniSelect
+        /// 左右の半円に触れている間：やわらかい警告音
+        case puniDanger
+        /// 実績：レ・ソ・ドと上がるチャイム
+        case puniAchievement
+        /// ゲームオーバー：低く下がる音のあと、ゆっくり下りていく和音
+        case puniGameOver
     }
 
     func play(_ effect: Effect) {
@@ -112,19 +123,60 @@ final class GameAudio {
         var add: [Voice] = []
         let sr = sampleRate
         switch effect {
-        case .squish(let level, let combo):
+        case .puniMerge(let level):
             medium.impactOccurred(intensity: min(0.5 + Double(level) * 0.04, 1))
-            let base = midi(82 - Double(min(level, 12)) * 2.2 + Double(min(max(combo - 1, 0), 6)) * 1.5)
-            // 「ぽ」：やわらかい低い音が沈む
-            add.append(Voice(sr, f0: base * 0.42, f1: base * 0.28, length: 0.18, wave: .sine, volume: 0.34, decay: 4, attack: 0.004))
-            // 「にゅ」：水の粒のように音程が上がる
-            add.append(Voice(sr, f0: base * 0.75, f1: base * 1.7, length: 0.12, wave: .sine, volume: 0.24, delay: 0.012, decay: 3,
-                             attack: 0.006))
-            add.append(Voice(sr, f0: base * 1.5, f1: base * 2.6, length: 0.09, wave: .triangle, volume: 0.06, delay: 0.025, decay: 4,
-                             filter: 0.5))
-            if combo >= 2 {
-                // 続けてくっつくと、きらっと小さな鈴
-                add.append(Voice(sr, f0: base * 3, length: 0.25, wave: .bell, volume: 0.05, delay: 0.05, decay: 5))
+            // 本家：E 長調の 3 音（330・415・495Hz）が 0.1 秒おきに鳴る、ほぼ純音の音。
+            // 大きさ（面積）が 2 倍になるごとに音程が 1/5 オクターブ下がり、3dB 大きくなる。
+            // ここでは 1 段大きくなるごとに半音下げる（レベル 3 で本家の高さ）
+            let shift = Double(3 - min(level, 14))
+            let gain = pow(10, Double(min(level, 14) - 3) * 1.25 / 20)
+            let notes: [Double] = [64, 68, 71]
+            for (i, n) in notes.enumerated() {
+                let last = i == notes.count - 1
+                add.append(Voice(sr, f0: midi(n + shift), length: last ? 0.5 : 0.12, wave: .sine,
+                                 volume: 0.2 * gain, delay: 0.1 * Double(i), decay: last ? 3.9 : 2.4, attack: 0.008))
+                // 2 倍音をごく小さく（本家も -45dB ほどある）
+                add.append(Voice(sr, f0: midi(n + shift + 12), length: last ? 0.3 : 0.1, wave: .sine,
+                                 volume: 0.006 * gain, delay: 0.1 * Double(i), decay: 4, attack: 0.008))
+            }
+        case .puniLaunch:
+            light.impactOccurred(intensity: 0.6)
+            // 本家：低い音が 125→235Hz へ上がる「ぽ」、続いて小さく 280→850Hz の「こっ」、0.25 秒後に小さなこだま
+            add.append(Voice(sr, f0: 125, f1: 235, length: 0.11, wave: .sine, volume: 0.36, decay: 1.5, attack: 0.008))
+            add.append(Voice(sr, f0: 280, f1: 850, length: 0.14, wave: .sine, volume: 0.08, delay: 0.1, decay: 2, attack: 0.01))
+            add.append(Voice(sr, f0: 127, f1: 225, length: 0.1, wave: .sine, volume: 0.05, delay: 0.25, decay: 1.5, attack: 0.008))
+        case .puniSelect:
+            light.impactOccurred(intensity: 0.35)
+            add.append(Voice(sr, f0: 1320, f1: 1180, length: 0.05, wave: .sine, volume: 0.08, decay: 4, attack: 0.002))
+            add.append(Voice(sr, f0: 0, length: 0.012, wave: .noise, volume: 0.04, decay: 8, filter: 0.3))
+        case .puniDanger:
+            light.impactOccurred(intensity: 0.3)
+            // ピ・ポ：角を丸めた（こもらせた）矩形波の 2 音
+            add.append(Voice(sr, f0: 988, length: 0.13, wave: .square, volume: 0.05, decay: 1.5, attack: 0.01, filter: 0.12))
+            add.append(Voice(sr, f0: 784, length: 0.16, wave: .square, volume: 0.05, delay: 0.16, decay: 1.5, attack: 0.01,
+                             filter: 0.12))
+        case .puniAchievement:
+            notify.notificationOccurred(.success)
+            // 本家：レ（1175Hz）→ ソ（1567Hz）→ 少し間をおいてド（2093Hz）。長く響く
+            for (n, at, len) in [(86.0, 0.0, 0.4), (91.0, 0.06, 0.6), (96.0, 0.38, 1.3)] {
+                add.append(Voice(sr, f0: midi(n), length: len, wave: .sine, volume: 0.1, delay: at, decay: 3, attack: 0.003))
+                add.append(Voice(sr, f0: midi(n), length: len * 0.6, wave: .bell, volume: 0.03, delay: at, decay: 4))
+            }
+        case .puniGameOver:
+            notify.notificationOccurred(.error)
+            // 本家：まず低い音が 220→110Hz へ下がる（コントロールを失った音）
+            add.append(Voice(sr, f0: 221, f1: 110, length: 0.6, wave: .triangle, volume: 0.22, decay: 2.5, attack: 0.01,
+                             filter: 0.25))
+            // 続いて、ミ・ド・ラ・シ・ソ・ミと下りて、ド・ミ・ソの和音で静かに終わる
+            let start = 0.8
+            for (n, at) in [(76.0, 0.0), (72.0, 0.15), (69.0, 0.45), (71.0, 0.65), (67.0, 0.9), (64.0, 1.1)] {
+                add.append(Voice(sr, f0: midi(n), length: 0.6, wave: .sine, volume: 0.1, delay: start + at, decay: 3,
+                                 attack: 0.01))
+                add.append(Voice(sr, f0: midi(n + 12), length: 0.3, wave: .bell, volume: 0.02, delay: start + at, decay: 5))
+            }
+            for n in [60.0, 64, 67] {
+                add.append(Voice(sr, f0: midi(n), length: 2.4, wave: .sine, volume: 0.07, delay: start + 1.3, decay: 2.2,
+                                 attack: 0.03))
             }
         case .tap:
             light.impactOccurred(intensity: 0.5)

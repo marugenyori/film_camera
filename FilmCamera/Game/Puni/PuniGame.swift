@@ -115,6 +115,8 @@ final class PuniGame: ObservableObject {
     /// このコマで左右の半円に触れたか
     private(set) var touchingLeft = false
     private(set) var touchingRight = false
+    /// 次の警告音までの秒数
+    private var dangerBeep: Double = 0
     private var touchLeftNow = false
     private var touchRightNow = false
     private var nextID = 0
@@ -259,7 +261,7 @@ final class PuniGame: ObservableObject {
         for p in blobs[index].pos.indices { blobs[index].prev[p] = blobs[index].pos[p] - velocity * step }
         shots += 1
         enterTimer = max(enterTimer, 0.15)
-        GameAudio.shared.play(.tap)
+        GameAudio.shared.play(.puniLaunch)
     }
 
     private func makeBlob(level: Int, center: Vec) -> Blob {
@@ -553,7 +555,7 @@ final class PuniGame: ObservableObject {
             born.append(blob)
             biggest = max(biggest, level)
             haptic.impactOccurred(intensity: min(0.4 + CGFloat(level) * 0.05, 1))
-            GameAudio.shared.play(.squish(level: level, combo: combo))
+            GameAudio.shared.play(.puniMerge(level: level))
             unlock(level: level)
         }
         blobs = blobs.enumerated().filter { !removed.contains($0.offset) }.map(\.element) + born
@@ -575,7 +577,7 @@ final class PuniGame: ObservableObject {
         UserDefaults.standard.set(Array(achieved), forKey: "puniAchievements")
         nextID += 1
         popup = Popup(id: nextID, text: name)
-        GameAudio.shared.play(.win)
+        GameAudio.shared.play(.puniAchievement)
     }
 
     /// 左右の半円に玉が触れている間、その側のゲージがたまる（6 秒でいっぱい。触れていないときは少しずつ戻る）。
@@ -588,9 +590,19 @@ final class PuniGame: ObservableObject {
         leftGauge = touchingLeft ? min(leftGauge + dt / 6, 1) : max(0, leftGauge - dt / 40)
         rightGauge = touchingRight ? min(rightGauge + dt / 6, 1) : max(0, rightGauge - dt / 40)
         danger = min(leftGauge, rightGauge)
+        // 触れている間は、0.6 秒ごとに警告音
+        if touchingLeft || touchingRight {
+            dangerBeep -= dt
+            if dangerBeep <= 0 {
+                dangerBeep = 0.6
+                GameAudio.shared.play(.puniDanger)
+            }
+        } else {
+            dangerBeep = 0
+        }
         if leftGauge >= 1, rightGauge >= 1 {
             gameOver = true
-            GameAudio.shared.play(.lose)
+            GameAudio.shared.play(.puniGameOver)
         }
     }
 }

@@ -33,6 +33,7 @@ struct PuniGameView: View {
                                         // 指を置いた場所にいちばん近い列の玉を選ぶ
                                         picked = game.queueBlob(near: Float(value.startLocation.x - inner.minX))
                                         game.holding = true
+                                        if picked != nil { GameAudio.shared.play(.puniSelect) }
                                     }
                                     finger = point
                                 }
