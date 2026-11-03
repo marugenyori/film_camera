@@ -363,17 +363,23 @@ final class PuniGame: ObservableObject {
         let radius = sqrt(blobs[b].area / .pi)
         let edge = 2 * radius * sin(.pi / Float(count))
         let skip = 2 * radius * sin(2 * .pi / Float(count))
+        // 筒の中の玉は、上下の壁でつぶされ、となりの玉にも押されるので、やわらかすぎるとふちが折れ重なる
+        // （上の列でくっつけたときに、ふちが輪のようにねじれた）。筒の中だけは、ふちを強めにつなぐ
+        let queued = blobs[b].queued
+        let edgeStiffness: Float = queued ? 0.25 : 0.01
+        let skipStiffness: Float = queued ? 0.02 : 0.0005
+        let smoothing: Float = queued ? 0.1 : 0.03
         for i in 0..<count {
             let j = (i + 1) % count
             let delta = blobs[b].pos[j] - blobs[b].pos[i]
             let length = max(simd_length(delta), 0.0001)
-            let correction = delta * ((length - edge) / length * 0.5 * 0.01)
+            let correction = delta * ((length - edge) / length * 0.5 * edgeStiffness)
             blobs[b].pos[i] += correction
             blobs[b].pos[j] -= correction
             let k = (i + 2) % count
             let delta2 = blobs[b].pos[k] - blobs[b].pos[i]
             let length2 = max(simd_length(delta2), 0.0001)
-            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.0005)
+            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * skipStiffness)
             blobs[b].pos[i] += correction2
             blobs[b].pos[k] -= correction2
         }
@@ -382,7 +388,7 @@ final class PuniGame: ObservableObject {
         let original = blobs[b].pos
         for i in 0..<count {
             let middle = (original[(i + count - 1) % count] + original[(i + 1) % count]) * 0.5
-            blobs[b].pos[i] += (middle - original[i]) * 0.03
+            blobs[b].pos[i] += (middle - original[i]) * smoothing
         }
         // 圧力：面積の差を、各点の「面積を増やす向き」に分ける
         let current = blobs[b].currentArea
@@ -398,6 +404,8 @@ final class PuniGame: ObservableObject {
         guard sum > 0.0001 else { return }
         let lambda = (blobs[b].area - current) / sum * 0.25
         for i in 0..<count { blobs[b].pos[i] += gradients[i] * lambda }
+        // 筒の中では丸に戻さない（丸は筒より太く、上下の壁と引っぱり合ってふちが折れる）
+        guard !queued else { return }
         // 形を丸に戻す弱い力（回転に合わせた丸へ少しだけ寄せる）。ねじれや、こぶが残らないようにする。弱いのでぶよぶよはそのまま
         let center = blobs[b].center
         var dotSum: Float = 0, crossSum: Float = 0
@@ -550,21 +558,31 @@ final class PuniGame: ObservableObject {
             // 大きいほうの玉の大きさの丸から始めて、本来の大きさへふくらむ（形がくずれない）
             let count = pointCount(level)
             let start = sqrt(max(areaA, areaB) / .pi)
+            let inTube = first.queued || second.queued
+            // 筒の中でくっついたときは、はじめから筒の太さの横長の形にする（丸だと筒の壁で押しつぶされて折れる）
+            let halfHeight = queueHeight * 0.5
+            let halfWidth = max(areaA, areaB) / (.pi * halfHeight)
             var points: [Vec] = []
             var previous: [Vec] = []
             for index in 0..<count {
                 let angle = Float(index) / Float(count) * 2 * .pi
                 let direction = Vec(cos(angle), sin(angle))
-                points.append(center + direction * start)
-                // ぷるんと外へはずむ
-                previous.append(center + direction * (start - width * 0.004))
+                if inTube {
+                    let p = center + Vec(direction.x * halfWidth, direction.y * halfHeight)
+                    points.append(p)
+                    previous.append(p)
+                } else {
+                    points.append(center + direction * start)
+                    // ぷるんと外へはずむ
+                    previous.append(center + direction * (start - width * 0.004))
+                }
             }
             nextID += 1
             var blob = Blob(id: nextID, level: level, pos: points, prev: previous, area: max(areaA, areaB), targetArea: area(level))
             blob.age = 0.05
             blob.flash = 1
             // 列の玉にぶつけてくっついたら、そのまま列（筒）の中に残る
-            blob.queued = first.queued || second.queued
+            blob.queued = inTube
             // 点数：生まれた玉の数字
             score += blob.value
             nextID += 1
