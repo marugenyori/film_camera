@@ -310,6 +310,7 @@ final class PuniGame: ObservableObject {
             // くっついた直後の大きさから、本来の大きさへ
             blobs[index].area += (blobs[index].targetArea - blobs[index].area) * Float(min(1, dt * 3))
         }
+        repairTangles()
         feedQueue(dt)
         checkDanger(dt)
         countScore(dt)
@@ -355,6 +356,47 @@ final class PuniGame: ObservableObject {
             for b in blobs.indices { walls(b) }
         }
         if !touching.isEmpty { merge(touching) }
+    }
+
+    /// ふちが自分自身と交わった玉（輪のようにねじれた玉）を、同じ面積のきれいな形に作り直す。
+    /// やわらかくした分、押しつぶされるとまれにふちが折れ重なるので、その安全装置
+    private func repairTangles() {
+        for b in blobs.indices where Self.isTangled(blobs[b].pos) {
+            let count = blobs[b].pos.count
+            let center = blobs[b].center
+            var velocity = Vec(0, 0)
+            for i in 0..<count { velocity += blobs[b].pos[i] - blobs[b].prev[i] }
+            velocity /= Float(count)
+            let area = max(abs(blobs[b].currentArea), blobs[b].area * 0.8)
+            // 筒の中は筒の太さの横長、容器の中は丸
+            let halfHeight = blobs[b].queued ? min(queueHeight * 0.5, sqrt(area / .pi)) : sqrt(area / .pi)
+            let halfWidth = area / (.pi * halfHeight)
+            for i in 0..<count {
+                let angle = Float(i) / Float(count) * 2 * .pi
+                let p = center + Vec(cos(angle) * halfWidth, sin(angle) * halfHeight)
+                blobs[b].pos[i] = p
+                blobs[b].prev[i] = p - velocity
+            }
+            blobs[b].updateBounds()
+        }
+    }
+
+    /// ふちの線どうしが交わっているか（となりどうしの線は除く）
+    private static func isTangled(_ points: [Vec]) -> Bool {
+        let count = points.count
+        guard count > 3 else { return false }
+        func cross(_ o: Vec, _ a: Vec, _ b: Vec) -> Float { (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x) }
+        for i in 0..<(count - 2) {
+            let a1 = points[i], a2 = points[(i + 1) % count]
+            for j in (i + 2)..<count {
+                if i == 0 && j == count - 1 { continue }
+                let b1 = points[j], b2 = points[(j + 1) % count]
+                let d1 = cross(b1, b2, a1), d2 = cross(b1, b2, a2)
+                let d3 = cross(a1, a2, b1), d4 = cross(a1, a2, b2)
+                if (d1 > 0) != (d2 > 0), (d3 > 0) != (d4 > 0), d1 != 0, d2 != 0, d3 != 0, d4 != 0 { return true }
+            }
+        }
+        return false
     }
 
     /// まわりのばね（となり・ひとつ飛ばし）と、面積を保つ圧力
