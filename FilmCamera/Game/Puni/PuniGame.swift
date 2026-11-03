@@ -353,6 +353,7 @@ final class PuniGame: ObservableObject {
             for b in blobs.indices { blobs[b].updateBounds() }
             let pairs = collide(record: iteration == 2)
             if iteration == 2 { touching = pairs }
+            separateQueue()
             for b in blobs.indices { walls(b) }
         }
         if !touching.isEmpty { merge(touching) }
@@ -403,8 +404,17 @@ final class PuniGame: ObservableObject {
     private func keepShape(_ b: Int) {
         let count = blobs[b].pos.count
         let radius = sqrt(blobs[b].area / .pi)
-        let edge = 2 * radius * sin(.pi / Float(count))
-        let skip = 2 * radius * sin(2 * .pi / Float(count))
+        var edge = 2 * radius * sin(.pi / Float(count))
+        var skip = 2 * radius * sin(2 * .pi / Float(count))
+        // 筒より太い玉は筒の中で横長（両はしが丸い形）になる。ふちの長さを丸のままにしておくと、
+        // ばねがふちを縮めようとして上下がへこみ、ひょうたんの形になるので、横長の形のふちの長さに合わせる
+        let tube = queueHeight * 1.1
+        if blobs[b].queued, 2 * radius > tube {
+            let straight = (blobs[b].area - .pi * tube * tube / 4) / tube
+            let perimeter = 2 * straight + .pi * tube
+            edge = perimeter / Float(count)
+            skip = edge * 2 * 0.97
+        }
         // 筒の中の玉は、上下の壁でつぶされ、となりの玉にも押されるので、やわらかすぎるとふちが折れ重なる
         // （上の列でくっつけたときに、ふちが輪のようにねじれた）。筒の中だけは、ふちを強めにつなぐ
         let queued = blobs[b].queued
@@ -462,6 +472,30 @@ final class PuniGame: ObservableObject {
             let angle = Float(i) / Float(count) * 2 * .pi + turn
             let target = center + Vec(cos(angle), sin(angle)) * radius
             blobs[b].pos[i] += (target - blobs[b].pos[i]) * 0.002
+        }
+    }
+
+    /// 筒の中の玉は一列に並ぶので、左右の重なりをまるごと押し分ける（筒の真ん中へ引かれて、めりこんだままになるのを防ぐ）
+    private func separateQueue() {
+        let order = blobs.indices.filter { blobs[$0].queued }.sorted { blobs[$0].center.x < blobs[$1].center.x }
+        guard order.count > 1 else { return }
+        for k in 0..<(order.count - 1) {
+            let left = order[k], right = order[k + 1]
+            blobs[left].updateBounds()
+            blobs[right].updateBounds()
+            let overlap = blobs[left].maxX - blobs[right].minX
+            guard overlap > 0 else { continue }
+            let shift = Vec(overlap / 2, 0)
+            for i in blobs[left].pos.indices {
+                blobs[left].pos[i] -= shift
+                blobs[left].prev[i] -= shift
+            }
+            for i in blobs[right].pos.indices {
+                blobs[right].pos[i] += shift
+                blobs[right].prev[i] += shift
+            }
+            blobs[left].updateBounds()
+            blobs[right].updateBounds()
         }
     }
 
