@@ -367,15 +367,22 @@ final class PuniGame: ObservableObject {
             let j = (i + 1) % count
             let delta = blobs[b].pos[j] - blobs[b].pos[i]
             let length = max(simd_length(delta), 0.0001)
-            let correction = delta * ((length - edge) / length * 0.5 * 0.02)
+            let correction = delta * ((length - edge) / length * 0.5 * 0.01)
             blobs[b].pos[i] += correction
             blobs[b].pos[j] -= correction
             let k = (i + 2) % count
             let delta2 = blobs[b].pos[k] - blobs[b].pos[i]
             let length2 = max(simd_length(delta2), 0.0001)
-            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.0008)
+            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.0005)
             blobs[b].pos[i] += correction2
             blobs[b].pos[k] -= correction2
+        }
+        // ふちをなめらかに：各点を両どなりの真ん中へ少し寄せる。小さなこぶやへこみ（しわ）だけが消え、
+        // 全体の大きな形の変わり方（ぶよぶよ）はそのまま。縮んだ分は次の圧力でふくらむ
+        let original = blobs[b].pos
+        for i in 0..<count {
+            let middle = (original[(i + count - 1) % count] + original[(i + 1) % count]) * 0.5
+            blobs[b].pos[i] += (middle - original[i]) * 0.03
         }
         // 圧力：面積の差を、各点の「面積を増やす向き」に分ける
         let current = blobs[b].currentArea
@@ -389,7 +396,7 @@ final class PuniGame: ObservableObject {
             sum += simd_length_squared(gradient)
         }
         guard sum > 0.0001 else { return }
-        let lambda = (blobs[b].area - current) / sum * 0.12
+        let lambda = (blobs[b].area - current) / sum * 0.25
         for i in 0..<count { blobs[b].pos[i] += gradients[i] * lambda }
         // 形を丸に戻す弱い力（回転に合わせた丸へ少しだけ寄せる）。ねじれや、こぶが残らないようにする。弱いのでぶよぶよはそのまま
         let center = blobs[b].center
