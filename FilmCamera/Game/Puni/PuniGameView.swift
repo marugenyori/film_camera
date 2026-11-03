@@ -12,6 +12,8 @@ struct PuniGameView: View {
     @State private var ticker: MartTicker?
     @State private var showingMenu = false
     @State private var stretchStep = 0
+    /// 音を消しているか（ほかのゲームと共通の設定。ここで消した覚えがなくても、ほかのゲームで消すと消える）
+    @State private var muted = GameAudio.shared.isMuted
 
     var body: some View {
         ZStack {
@@ -160,6 +162,17 @@ struct PuniGameView: View {
                     .frame(width: 44, height: 44)
             }
             .accessibilityLabel("メニュー")
+            Button {
+                muted.toggle()
+                GameAudio.shared.isMuted = muted
+                PuniSounds.shared.refreshMuted()
+            } label: {
+                Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 20, weight: .heavy))
+                    .foregroundStyle(Color(white: muted ? 0.55 : 0.32))
+                    .frame(width: 40, height: 44)
+            }
+            .accessibilityLabel(muted ? "音を出す" : "音を消す")
             Text("best \(game.best)")
                 .font(.system(size: 13, weight: .heavy, design: .rounded).monospacedDigit())
                 .foregroundStyle(Color(white: 0.32))

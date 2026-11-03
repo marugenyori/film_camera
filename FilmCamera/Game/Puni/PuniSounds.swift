@@ -75,9 +75,21 @@ final class PuniSounds {
 
     private init() {}
 
-    private func start() {
+    /// 音を消す設定（ほかのゲームと共通）を読み直す
+    func refreshMuted() {
         lock.lock(); muted = UserDefaults.standard.bool(forKey: "gameMuted"); lock.unlock()
-        guard !started else { return }
+    }
+
+    private func start() {
+        refreshMuted()
+        if started {
+            // 電話・ほかのアプリ・イヤホンの抜き差しなどで止まっていたら、動かし直す
+            if !engine.isRunning {
+                try? AVAudioSession.sharedInstance().setActive(true)
+                try? engine.start()
+            }
+            return
+        }
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, options: [.mixWithOthers])
         try? session.setActive(true)
