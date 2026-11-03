@@ -99,6 +99,9 @@ final class PuniGame: ObservableObject {
 
     @Published private(set) var frame = 0
     @Published private(set) var score = 0
+    /// 画面に出す点数（本家と同じく、増えた分をカタカタと数え上げる。その間は音が鳴る）
+    @Published private(set) var shownScore = 0
+    private var shownScoreSmooth: Double = 0
     @Published private(set) var best = UserDefaults.standard.integer(forKey: "puniBest2")
     @Published private(set) var gameOver = false
     @Published var popup: Popup?
@@ -115,8 +118,6 @@ final class PuniGame: ObservableObject {
     /// このコマで左右の半円に触れたか
     private(set) var touchingLeft = false
     private(set) var touchingRight = false
-    /// 次の警告音までの秒数
-    private var dangerBeep: Double = 0
     private var touchLeftNow = false
     private var touchRightNow = false
     private var nextID = 0
@@ -176,6 +177,8 @@ final class PuniGame: ObservableObject {
         shots = 0
         enterTimer = 0
         score = 0
+        shownScore = 0
+        shownScoreSmooth = 0
         gains = []
         combo = 0
         biggest = 0
@@ -184,6 +187,17 @@ final class PuniGame: ObservableObject {
         rightGauge = 0
         gameOver = false
         frame += 1
+        PuniSounds.shared.play(.start, db: 9)
+    }
+
+    /// 画面を開いたとき（始まりの音）
+    func begin() {
+        PuniSounds.shared.play(.start, db: 9)
+    }
+
+    /// 画面を閉じたとき
+    func end() {
+        PuniSounds.shared.stop()
     }
 
     // MARK: - 上の列（細い筒の中で押し合う、本物のやわらかい玉）
@@ -261,7 +275,7 @@ final class PuniGame: ObservableObject {
         for p in blobs[index].pos.indices { blobs[index].prev[p] = blobs[index].pos[p] - velocity * step }
         shots += 1
         enterTimer = max(enterTimer, 0.15)
-        GameAudio.shared.play(.puniLaunch)
+        PuniSounds.shared.play(.launch)
     }
 
     private func makeBlob(level: Int, center: Vec) -> Blob {
@@ -298,6 +312,7 @@ final class PuniGame: ObservableObject {
         }
         feedQueue(dt)
         checkDanger(dt)
+        countScore(dt)
         for index in blobs.indices where blobs[index].flash > 0 {
             blobs[index].flash = max(0, blobs[index].flash - dt * 2.5)
         }
@@ -326,7 +341,7 @@ final class PuniGame: ObservableObject {
             }
             for i in blobs[b].pos.indices {
                 let p = blobs[b].pos[i]
-                let velocity = (p - blobs[b].prev[i]) * 0.998
+                let velocity = (p - blobs[b].prev[i]) * 0.997
                 blobs[b].prev[i] = p
                 blobs[b].pos[i] = p + velocity + gravity
             }
@@ -352,13 +367,13 @@ final class PuniGame: ObservableObject {
             let j = (i + 1) % count
             let delta = blobs[b].pos[j] - blobs[b].pos[i]
             let length = max(simd_length(delta), 0.0001)
-            let correction = delta * ((length - edge) / length * 0.5 * 0.06)
+            let correction = delta * ((length - edge) / length * 0.5 * 0.02)
             blobs[b].pos[i] += correction
             blobs[b].pos[j] -= correction
             let k = (i + 2) % count
             let delta2 = blobs[b].pos[k] - blobs[b].pos[i]
             let length2 = max(simd_length(delta2), 0.0001)
-            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.002)
+            let correction2 = delta2 * ((length2 - skip) / length2 * 0.5 * 0.0008)
             blobs[b].pos[i] += correction2
             blobs[b].pos[k] -= correction2
         }
@@ -389,7 +404,7 @@ final class PuniGame: ObservableObject {
         for i in 0..<count {
             let angle = Float(i) / Float(count) * 2 * .pi + turn
             let target = center + Vec(cos(angle), sin(angle)) * radius
-            blobs[b].pos[i] += (target - blobs[b].pos[i]) * 0.005
+            blobs[b].pos[i] += (target - blobs[b].pos[i]) * 0.002
         }
     }
 
@@ -555,7 +570,7 @@ final class PuniGame: ObservableObject {
             born.append(blob)
             biggest = max(biggest, level)
             haptic.impactOccurred(intensity: min(0.4 + CGFloat(level) * 0.05, 1))
-            GameAudio.shared.play(.puniMerge(level: level))
+            PuniSounds.shared.merge(areaRatio: area(level) / area(2))
             unlock(level: level)
         }
         blobs = blobs.enumerated().filter { !removed.contains($0.offset) }.map(\.element) + born
@@ -577,11 +592,20 @@ final class PuniGame: ObservableObject {
         UserDefaults.standard.set(Array(achieved), forKey: "puniAchievements")
         nextID += 1
         popup = Popup(id: nextID, text: name)
-        GameAudio.shared.play(.puniAchievement)
+        PuniSounds.shared.play(.achievement)
     }
 
     /// 左右の半円に玉が触れている間、その側のゲージがたまる（6 秒でいっぱい。触れていないときは少しずつ戻る）。
     /// 両方いっぱいになったらゲームオーバー
+    /// 画面の点数を本当の点数へ近づける。数えている間は点数の音を鳴らす
+    private func countScore(_ dt: Double) {
+        guard shownScore != score || shownScoreSmooth != Double(score) else { return }
+        shownScoreSmooth += (Double(score) - shownScoreSmooth) * min(1, dt * 8)
+        if abs(Double(score) - shownScoreSmooth) < 0.5 { shownScoreSmooth = Double(score) }
+        shownScore = Int(shownScoreSmooth.rounded())
+        PuniSounds.shared.setScoreCounting(score - shownScore)
+    }
+
     private func checkDanger(_ dt: Double) {
         touchingLeft = touchLeftNow
         touchingRight = touchRightNow
@@ -590,19 +614,16 @@ final class PuniGame: ObservableObject {
         leftGauge = touchingLeft ? min(leftGauge + dt / 6, 1) : max(0, leftGauge - dt / 40)
         rightGauge = touchingRight ? min(rightGauge + dt / 6, 1) : max(0, rightGauge - dt / 40)
         danger = min(leftGauge, rightGauge)
-        // 触れている間は、0.6 秒ごとに警告音
-        if touchingLeft || touchingRight {
-            dangerBeep -= dt
-            if dangerBeep <= 0 {
-                dangerBeep = 0.6
-                GameAudio.shared.play(.puniDanger)
-            }
-        } else {
-            dangerBeep = 0
-        }
+        // 触れている間は警告音を鳴らし続ける（ゲージがたまるほど大きく）
+        let pressed = max(touchingLeft ? leftGauge : 0, touchingRight ? rightGauge : 0)
+        PuniSounds.shared.setDanger(touchingLeft || touchingRight ? Float(0.5 + 0.5 * pressed) : 0)
         if leftGauge >= 1, rightGauge >= 1 {
             gameOver = true
-            GameAudio.shared.play(.puniGameOver)
+            PuniSounds.shared.setDanger(0)
+            PuniSounds.shared.setScoreCounting(0)
+            // 本家：まず「コントロールを失った」音（-9dB・音程 0.8）、少しあとにゲームオーバーの音（+9dB）
+            PuniSounds.shared.play(.loss, db: -9, pitch: 0.8)
+            PuniSounds.shared.play(.gameOver, db: 9, delay: 1.0)
         }
     }
 }

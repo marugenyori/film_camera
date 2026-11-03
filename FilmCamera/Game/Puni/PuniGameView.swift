@@ -11,6 +11,7 @@ struct PuniGameView: View {
     @State private var amassShown = false
     @State private var ticker: MartTicker?
     @State private var showingMenu = false
+    @State private var stretchStep = 0
 
     var body: some View {
         ZStack {
@@ -33,9 +34,18 @@ struct PuniGameView: View {
                                         // 指を置いた場所にいちばん近い列の玉を選ぶ
                                         picked = game.queueBlob(near: Float(value.startLocation.x - inner.minX))
                                         game.holding = true
-                                        if picked != nil { GameAudio.shared.play(.puniSelect) }
                                     }
                                     finger = point
+                                    // 矢印をのばしていくと、一定の長さごとにカチッと鳴る（長いほど高く）
+                                    if let index = picked {
+                                        let origin = game.launchPoint(index)
+                                        let length = hypot(Float(point.x) - origin.x, Float(point.y) - origin.y)
+                                        let step = Int(length / (game.width * 0.04))
+                                        if step != stretchStep {
+                                            stretchStep = step
+                                            PuniSounds.shared.stretch(pitch: 0.7 + Double(min(length / (game.width * 0.5), 1)) * 0.9)
+                                        }
+                                    }
                                 }
                                 .onEnded { value in
                                     if let index = picked {
@@ -45,6 +55,7 @@ struct PuniGameView: View {
                                     }
                                     picked = nil
                                     finger = nil
+                                    stretchStep = 0
                                     game.holding = false
                                 }
                         )
@@ -113,6 +124,8 @@ struct PuniGameView: View {
         .confirmationDialog("メニュー", isPresented: $showingMenu) {
             Button("最初からやり直す", role: .destructive) { game.restart() }
             Button("やめる") { dismiss() }
+        } message: {
+            Text(PuniSounds.credits)
         }
         .onAppear {
             let model = game
@@ -121,10 +134,12 @@ struct PuniGameView: View {
             }
             ticker.start()
             self.ticker = ticker
+            game.begin()
         }
         .onDisappear {
             ticker?.stop()
             ticker = nil
+            game.end()
         }
     }
 
@@ -149,7 +164,7 @@ struct PuniGameView: View {
                 .font(.system(size: 13, weight: .heavy, design: .rounded).monospacedDigit())
                 .foregroundStyle(Color(white: 0.32))
             Spacer()
-            Text("\(game.score)")
+            Text("\(game.shownScore)")
                 .font(.system(size: 54, weight: .black, design: .rounded).monospacedDigit())
                 .foregroundStyle(Color(white: 0.28))
                 .lineLimit(1)
