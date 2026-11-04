@@ -481,6 +481,8 @@ final class PuniGame: ObservableObject {
         guard order.count > 1 else { return }
         for k in 0..<(order.count - 1) {
             let left = order[k], right = order[k + 1]
+            // 同じ数字どうしは押し分けない（さわってくっつけるように）
+            guard blobs[left].level != blobs[right].level else { continue }
             blobs[left].updateBounds()
             blobs[right].updateBounds()
             let overlap = blobs[left].maxX - blobs[right].minX
