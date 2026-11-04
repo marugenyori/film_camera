@@ -342,7 +342,7 @@ final class PuniGame: ObservableObject {
             }
             for i in blobs[b].pos.indices {
                 let p = blobs[b].pos[i]
-                let velocity = (p - blobs[b].prev[i]) * 0.997
+                let velocity = (p - blobs[b].prev[i]) * 0.998
                 blobs[b].prev[i] = p
                 blobs[b].pos[i] = p + velocity + gravity
             }
@@ -420,7 +420,7 @@ final class PuniGame: ObservableObject {
         let queued = blobs[b].queued
         let edgeStiffness: Float = queued ? 0.25 : 0.01
         let skipStiffness: Float = queued ? 0.02 : 0.0005
-        let smoothing: Float = queued ? 0.1 : 0.03
+        let smoothing: Float = queued ? 0.1 : 0.02
         for i in 0..<count {
             let j = (i + 1) % count
             let delta = blobs[b].pos[j] - blobs[b].pos[i]
@@ -454,7 +454,7 @@ final class PuniGame: ObservableObject {
             sum += simd_length_squared(gradient)
         }
         guard sum > 0.0001 else { return }
-        let lambda = (blobs[b].area - current) / sum * 0.25
+        let lambda = (blobs[b].area - current) / sum * (queued ? 0.25 : 0.15)
         for i in 0..<count { blobs[b].pos[i] += gradients[i] * lambda }
         // 筒の中では丸に戻さない（丸は筒より太く、上下の壁と引っぱり合ってふちが折れる）
         guard !queued else { return }
@@ -553,7 +553,7 @@ final class PuniGame: ObservableObject {
             blobs[a].pos[i] += move * 0.5
             // 押されている点は少しすべりにくく（止まったあとにぷるぷる震え続けないように）
             let previous = blobs[a].prev[i]
-            blobs[a].prev[i] = previous + (blobs[a].pos[i] - previous) * 0.08
+            blobs[a].prev[i] = previous + (blobs[a].pos[i] - previous) * 0.04
             let next = (bestEdge + 1) % countB
             blobs[b].pos[bestEdge] -= move * 0.5 * (1 - bestT)
             blobs[b].pos[next] -= move * 0.5 * bestT
@@ -612,7 +612,7 @@ final class PuniGame: ObservableObject {
             if touched {
                 // さわっているところは横の動きを少しおさえる
                 let previous = blobs[b].prev[i]
-                blobs[b].prev[i] = previous + (p - previous) * 0.15
+                blobs[b].prev[i] = previous + (p - previous) * 0.08
             }
             blobs[b].pos[i] = p
         }
@@ -652,7 +652,7 @@ final class PuniGame: ObservableObject {
                 } else {
                     points.append(center + direction * start)
                     // ぷるんと外へはずむ
-                    previous.append(center + direction * (start - width * 0.004))
+                    previous.append(center + direction * (start - width * 0.015))
                 }
             }
             nextID += 1
