@@ -302,17 +302,26 @@ struct PuniGameView: View {
                         Text("\(versus.opponentScore)").font(.system(.title, design: .rounded).weight(.black).monospacedDigit())
                     }
                 }
+                if versus.opponentGone {
+                    Text("\(versus.opponentName) との通信は切れています")
+                        .font(.caption)
+                        .foregroundStyle(Color(white: 0.6))
+                } else if versus.opponentWantsRematch && !versus.wantsRematch {
+                    Text("\(versus.opponentName) がもう一度やりたがっています")
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(.orange)
+                }
                 Button {
-                    versus.leave()
-                    versus.start()
+                    versus.rematch()
                 } label: {
-                    Text("また対戦する")
+                    Text(versus.opponentGone ? "新しい相手をさがす" : versus.wantsRematch ? "相手を待っています…" : "また対戦する")
                         .font(.system(size: 20, weight: .black, design: .rounded))
                         .foregroundStyle(.black)
-                        .frame(width: 200, height: 52)
-                        .background(Capsule().fill(.white))
+                        .frame(width: 220, height: 52)
+                        .background(Capsule().fill(.white.opacity(versus.wantsRematch ? 0.6 : 1)))
                 }
                 .buttonStyle(.plain)
+                .disabled(versus.wantsRematch)
                 Button("ひとりで遊ぶ") {
                     versus.leave()
                     game.restart()

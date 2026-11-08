@@ -31,6 +31,8 @@ final class PuniVersus: NSObject, ObservableObject {
         case board(blobs: [MiniBlob], score: Int, left: Double, right: Double)
         case garbage(Int)
         case lost
+        /// 「また対戦する」を押した
+        case rematch
     }
 
     @Published private(set) var phase: Phase = .idle
@@ -40,6 +42,11 @@ final class PuniVersus: NSObject, ObservableObject {
     @Published private(set) var opponentGauges: (left: Double, right: Double) = (0, 0)
     /// これから自分の容器に降ってくるおじゃま玉の数
     @Published private(set) var incoming = 0
+    /// 終わったあと「また対戦する」を押したか（自分・相手）
+    @Published private(set) var wantsRematch = false
+    @Published private(set) var opponentWantsRematch = false
+    /// 相手との通信が切れたか（切れていたら、また対戦は新しい相手をさがす）
+    @Published private(set) var opponentGone = false
 
     /// 対戦が始まったとき（ゲームを最初からにする）
     var onStart: (() -> Void)?
@@ -105,6 +112,8 @@ final class PuniVersus: NSObject, ObservableObject {
     }
 
     private func reset() {
+        wantsRematch = false
+        opponentWantsRematch = false
         opponentBlobs = []
         opponentScore = 0
         opponentGauges = (0, 0)
@@ -125,7 +134,21 @@ final class PuniVersus: NSObject, ObservableObject {
         Self.present(controller)
     }
 
+    /// 終わったあと、同じ相手ともう一度。2 人とも押したら始まる（相手がいなければ新しい相手をさがす）
+    func rematch() {
+        guard isFinished else { return }
+        guard let match, !opponentGone else {
+            leave()
+            start()
+            return
+        }
+        wantsRematch = true
+        send(.rematch, reliable: true)
+        if opponentWantsRematch { begin(match) }
+    }
+
     private func begin(_ match: GKMatch) {
+        opponentGone = false
         self.match = match
         match.delegate = self
         opponentName = match.players.first?.displayName ?? "相手"
@@ -198,6 +221,9 @@ final class PuniVersus: NSObject, ObservableObject {
             incoming += count
             // 少し待ってから降らせる（その間に大きい玉を作れば打ち消せる）
             incomingTimer = 2.0
+        case .rematch:
+            opponentWantsRematch = true
+            if wantsRematch, let match, isFinished { begin(match) }
         case .lost:
             guard phase == .playing || isCountdown else { return }
             phase = .finished(won: true, reason: "\(opponentName) のゲージが両方いっぱいになりました")
@@ -211,6 +237,7 @@ final class PuniVersus: NSObject, ObservableObject {
     }
 
     private func opponentLeft() {
+        opponentGone = true
         guard isActive else { return }
         phase = .finished(won: true, reason: "\(opponentName) との通信が切れました")
         onWin?()
