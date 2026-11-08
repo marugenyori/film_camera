@@ -193,6 +193,8 @@ final class AlbumStore: ObservableObject {
             status = nil
             await loadPhotos()
         } catch {
+            // 読み込み中に画面を離れた・読み直しが重なったなどで取り消されたのはエラーではない
+            guard !Self.isCancellation(error) else { return }
             status = Self.describe(error)
         }
     }
@@ -235,6 +237,7 @@ final class AlbumStore: ObservableObject {
             cache.save(state)
             apply(state, to: album)
         } catch {
+            guard !Self.isCancellation(error) else { return }
             // つながらないときも、控えの写真はそのまま見られる
             status = Self.describe(error)
         }
@@ -991,6 +994,15 @@ final class AlbumStore: ObservableObject {
         ]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         return UIImage(cgImage: image)
+    }
+
+    /// 処理が取り消されただけか（LINE などから戻ったとき、前の読み込みが取り消されて「コード 20」と出ていた）
+    nonisolated private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        guard let ck = error as? CKError else { return false }
+        if ck.code == .operationCancelled { return true }
+        if ck.code == .partialFailure, let inner = ck.partialErrorsByItemID?.values.first { return isCancellation(inner) }
+        return false
     }
 
     nonisolated private static func describe(_ error: Error) -> String {
