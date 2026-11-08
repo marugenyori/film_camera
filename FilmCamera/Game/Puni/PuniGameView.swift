@@ -5,6 +5,8 @@ import SwiftUI
 struct PuniGameView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var game = PuniGame()
+    /// オンライン対戦（Game Center）
+    @StateObject private var versus = PuniVersus()
     /// 選んだ列の玉と、指の場所（容器の中の座標）
     @State private var picked: Int?
     @State private var finger: CGPoint?
@@ -27,11 +29,16 @@ struct PuniGameView: View {
                     let inner = PuniBoard.innerRect(outer: outer)
                     PuniBoard(game: game, picked: picked, finger: finger)
                         .frame(width: outer, height: outer * PuniBoard.heightRatio)
+                        .overlay(alignment: .topLeading) {
+                            if versus.phase != .idle { versusOverlay(inner: inner) }
+                        }
                         .contentShape(Rectangle())
                         .gesture(
                             DragGesture(minimumDistance: 0)
                                 .onChanged { value in
                                     let point = CGPoint(x: value.location.x - inner.minX, y: value.location.y - inner.minY)
+                                    // 対戦の 3・2・1 の間は撃てない
+                                    if case .countdown = versus.phase { return }
                                     if picked == nil {
                                         // 指を置いた場所にいちばん近い列の玉を選ぶ
                                         picked = game.queueBlob(near: Float(value.startLocation.x - inner.minX))
@@ -109,7 +116,20 @@ struct PuniGameView: View {
                 }
                 .allowsHitTesting(false)
             }
-            if game.gameOver { gameOverCard }
+            if case let .countdown(count) = versus.phase {
+                Text("\(count)")
+                    .font(.system(size: 120, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black, radius: 8)
+                    .allowsHitTesting(false)
+            }
+            if case let .finished(won, reason) = versus.phase {
+                versusResultCard(won: won, reason: reason)
+            } else if case let .failed(message) = versus.phase {
+                versusFailedCard(message)
+            } else if game.gameOver {
+                gameOverCard
+            }
         }
         .animation(.spring(duration: 0.4, bounce: 0.3), value: game.popup)
         .animation(.spring(duration: 0.35, bounce: 0.5), value: amassShown)
@@ -124,15 +144,35 @@ struct PuniGameView: View {
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .confirmationDialog("メニュー", isPresented: $showingMenu) {
-            Button("最初からやり直す", role: .destructive) { game.restart() }
+            if versus.isActive {
+                Button("対戦をやめる", role: .destructive) {
+                    versus.leave()
+                    game.restart()
+                }
+            } else {
+                Button("オンライン対戦（Game Center）") { versus.start() }
+                Button("最初からやり直す", role: .destructive) { game.restart() }
+            }
             Button("やめる") { dismiss() }
         } message: {
             Text(PuniSounds.credits)
         }
         .onAppear {
             let model = game
-            let ticker = MartTicker { [weak model] dt in
-                MainActor.assumeIsolated { model?.step(dt) }
+            let match = versus
+            // 対戦：始まったら最初から、相手の大きい玉でおじゃま玉、相手が負けたら止める
+            versus.onStart = { [weak model] in model?.restart() }
+            versus.onGarbage = { [weak model] count in model?.dropGarbage(count) }
+            versus.onWin = { [weak model] in model?.stopForWin() }
+            game.onMerged = { [weak match] level in match?.merged(level: level) }
+            game.onLose = { [weak match] in match?.lost() }
+            let ticker = MartTicker { [weak model, weak match] dt in
+                MainActor.assumeIsolated {
+                    // 3・2・1 の間は止めておく
+                    if case .countdown = match?.phase { return }
+                    model?.step(dt)
+                    if let model { match?.tick(dt, game: model) }
+                }
             }
             ticker.start()
             self.ticker = ticker
@@ -141,6 +181,7 @@ struct PuniGameView: View {
         .onDisappear {
             ticker?.stop()
             ticker = nil
+            versus.leave()
             game.end()
         }
     }
@@ -185,6 +226,115 @@ struct PuniGameView: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 60)
+    }
+
+    // MARK: - オンライン対戦
+
+    /// 容器の右上に相手の容器を小さく、左上に来ているおじゃま玉の数
+    @ViewBuilder
+    private func versusOverlay(inner: CGRect) -> some View {
+        let miniWidth = inner.width * 0.15
+        let miniHeight = miniWidth * 1.9
+        let x = inner.maxX - miniWidth - inner.width * 0.02
+        let y = inner.minY + inner.width * 0.012
+        ZStack(alignment: .topLeading) {
+            PuniMiniBoard(blobs: versus.opponentBlobs, gauges: versus.opponentGauges)
+                .frame(width: miniWidth, height: miniHeight)
+                .offset(x: x, y: y)
+            VStack(alignment: .trailing, spacing: 0) {
+                Text(versus.opponentName)
+                    .font(.caption2.weight(.heavy))
+                    .lineLimit(1)
+                Text("\(versus.opponentScore)")
+                    .font(.system(.title3, design: .rounded).weight(.black).monospacedDigit())
+            }
+            .foregroundStyle(Color(white: 0.55))
+            .frame(width: inner.width * 0.4, alignment: .trailing)
+            .offset(x: x - inner.width * 0.42, y: y)
+            if versus.incoming > 0 {
+                Text("おじゃま ×\(versus.incoming)")
+                    .font(.system(.headline, design: .rounded).weight(.black))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color(red: 0.85, green: 0.15, blue: 0.2)))
+                    .offset(x: inner.minX + inner.width * 0.03, y: y)
+            }
+            if versus.phase == .searching {
+                Text("相手をさがしています…")
+                    .font(.headline)
+                    .foregroundStyle(Color(white: 0.6))
+                    .offset(x: inner.minX + inner.width * 0.03, y: y)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func versusResultCard(won: Bool, reason: String) -> some View {
+        ZStack {
+            Color.black.opacity(0.6).ignoresSafeArea()
+            VStack(spacing: 12) {
+                Text(won ? "かち！" : "まけ…")
+                    .font(.system(size: 44, weight: .black, design: .rounded))
+                Text(reason)
+                    .font(.subheadline)
+                    .foregroundStyle(Color(white: 0.7))
+                    .multilineTextAlignment(.center)
+                HStack(spacing: 20) {
+                    VStack {
+                        Text("じぶん").font(.caption.weight(.heavy))
+                        Text("\(game.score)").font(.system(.title, design: .rounded).weight(.black).monospacedDigit())
+                    }
+                    VStack {
+                        Text(versus.opponentName).font(.caption.weight(.heavy)).lineLimit(1)
+                        Text("\(versus.opponentScore)").font(.system(.title, design: .rounded).weight(.black).monospacedDigit())
+                    }
+                }
+                Button {
+                    versus.leave()
+                    versus.start()
+                } label: {
+                    Text("また対戦する")
+                        .font(.system(size: 20, weight: .black, design: .rounded))
+                        .foregroundStyle(.black)
+                        .frame(width: 200, height: 52)
+                        .background(Capsule().fill(.white))
+                }
+                .buttonStyle(.plain)
+                Button("ひとりで遊ぶ") {
+                    versus.leave()
+                    game.restart()
+                }
+                .font(.headline)
+                .foregroundStyle(Color(white: 0.6))
+            }
+            .foregroundStyle(.white)
+            .padding(30)
+            .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(Color(white: 0.2)))
+            .padding(30)
+        }
+    }
+
+    private func versusFailedCard(_ message: String) -> some View {
+        ZStack {
+            Color.black.opacity(0.6).ignoresSafeArea()
+            VStack(spacing: 14) {
+                Text("対戦できませんでした")
+                    .font(.system(size: 22, weight: .black, design: .rounded))
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(Color(white: 0.7))
+                    .multilineTextAlignment(.center)
+                Button("とじる") {
+                    versus.leave()
+                }
+                .font(.headline)
+            }
+            .foregroundStyle(.white)
+            .padding(30)
+            .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(Color(white: 0.2)))
+            .padding(30)
+        }
     }
 
     private var gameOverCard: some View {
@@ -397,5 +547,36 @@ private struct PuniBoard: View {
             arrow.addLine(to: CGPoint(x: end.x - cos(angle + side * 0.45) * 20, y: end.y - sin(angle + side * 0.45) * 20))
         }
         context.stroke(arrow, with: .color(.white), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+    }
+}
+
+/// 対戦相手の容器（小さく）。玉は数字の色の丸で、上に左右のゲージ
+private struct PuniMiniBoard: View {
+    let blobs: [PuniVersus.MiniBlob]
+    let gauges: (left: Double, right: Double)
+
+    var body: some View {
+        Canvas { context, size in
+            let rect = CGRect(origin: .zero, size: size)
+            context.fill(Path(roundedRect: rect, cornerRadius: 4), with: .color(Color(white: 0.05)))
+            context.stroke(Path(roundedRect: rect, cornerRadius: 4), with: .color(Color(white: 0.3)), lineWidth: 1.5)
+            let scale = size.width
+            for blob in blobs {
+                // ゲームの玉の半径（容器の幅に対する割合）と同じ式
+                let r = CGFloat(0.068 * pow(2, Double(blob.l) * 0.209)) * scale
+                let center = CGPoint(x: CGFloat(blob.x) / 1000 * scale, y: CGFloat(blob.y) / 1000 * scale)
+                let circle = Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
+                context.fill(circle, with: .color(PuniGame.color(blob.l)))
+            }
+            // 左右のゲージ（いっぱいに近いほど赤）
+            let barWidth = size.width * 0.4
+            for (index, value) in [gauges.left, gauges.right].enumerated() {
+                let x = index == 0 ? size.width * 0.06 : size.width * 0.54
+                let back = CGRect(x: x, y: 3, width: barWidth, height: 3)
+                context.fill(Path(back), with: .color(Color(white: 0.25)))
+                let front = CGRect(x: x, y: 3, width: barWidth * CGFloat(min(max(value, 0), 1)), height: 3)
+                context.fill(Path(front), with: .color(value > 0.8 ? .red : .orange))
+            }
+        }
     }
 }

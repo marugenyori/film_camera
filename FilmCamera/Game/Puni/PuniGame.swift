@@ -190,6 +190,50 @@ final class PuniGame: ObservableObject {
         PuniSounds.shared.play(.start, db: 9)
     }
 
+    // MARK: - オンライン対戦
+
+    /// くっついて新しい玉ができたとき（数字の段階）。対戦では 16 以上でおじゃま玉を送る
+    var onMerged: ((Int) -> Void)?
+    /// ゲームオーバーになったとき
+    var onLose: (() -> Void)?
+
+    /// 対戦で相手が先に負けたとき、自分のゲームを止める
+    func stopForWin() {
+        guard !gameOver else { return }
+        gameOver = true
+        PuniSounds.shared.setDanger(0)
+        PuniSounds.shared.setScoreCounting(0)
+        PuniSounds.shared.play(.achievement)
+    }
+
+    /// おじゃま玉（1 と 2）を、列の下から容器へ降らせる
+    func dropGarbage(_ count: Int) {
+        guard !gameOver, count > 0 else { return }
+        let top = queueY + queueHeight * 1.2
+        for k in 0..<count {
+            let level = Int.random(in: 0...1)
+            let r = radius(level)
+            let slot = (Float(k) + 0.5) / Float(count)
+            let x = min(max(r + 2, width * slot + Float.random(in: -r...r) * 0.5), width - r - 2)
+            var blob = makeBlob(level: level, center: Vec(x, top + r + Float.random(in: 0...(r * 2))))
+            let velocity = Vec(0, width * 0.8)
+            let step = Float(1.0 / 240)
+            for i in blob.prev.indices { blob.prev[i] = blob.pos[i] - velocity * step }
+            blob.flash = 0.6
+            blobs.append(blob)
+        }
+        PuniSounds.shared.play(.launch, db: -3, pitch: 0.7)
+    }
+
+    /// 相手に送る、自分の容器の玉（数字の段階と中心。容器の幅を 1 とした場所）
+    func miniSnapshot() -> [PuniVersus.MiniBlob] {
+        guard width > 0 else { return [] }
+        return blobs.map { blob in
+            let c = blob.center
+            return PuniVersus.MiniBlob(l: blob.level, x: Int(c.x / width * 1000), y: Int(c.y / width * 1000))
+        }
+    }
+
     /// 画面を開いたとき（始まりの音）
     func begin() {
         PuniSounds.shared.play(.start, db: 9)
@@ -674,6 +718,7 @@ final class PuniGame: ObservableObject {
             biggest = max(biggest, level)
             haptic.impactOccurred(intensity: min(0.4 + CGFloat(level) * 0.05, 1))
             PuniSounds.shared.merge(areaRatio: area(level) / area(2))
+            onMerged?(level)
             unlock(level: level)
         }
         blobs = blobs.enumerated().filter { !removed.contains($0.offset) }.map(\.element) + born
@@ -727,6 +772,7 @@ final class PuniGame: ObservableObject {
             // 本家：まず「コントロールを失った」音（-9dB・音程 0.8）、少しあとにゲームオーバーの音（+9dB）
             PuniSounds.shared.play(.loss, db: -9, pitch: 0.8)
             PuniSounds.shared.play(.gameOver, db: 9, delay: 1.0)
+            onLose?()
         }
     }
 }
