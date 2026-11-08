@@ -66,24 +66,27 @@ final class PuniVersus: NSObject, ObservableObject {
         guard phase == .idle || isFinished else { return }
         reset()
         phase = .searching
-        let player = GKLocalPlayer.local
-        if player.isAuthenticated {
-            showMatchmaker()
-            return
-        }
-        player.authenticateHandler = { [weak self] controller, error in
-            Task { @MainActor in
-                guard let self else { return }
-                if let controller {
-                    Self.present(controller)
-                } else if GKLocalPlayer.local.isAuthenticated {
-                    if self.phase == .searching { self.showMatchmaker() }
-                } else {
-                    let detail = error?.localizedDescription ?? ""
-                    self.phase = .failed("Game Center にサインインできませんでした。iPhone の「設定」→「Game Center」でサインインしてください。\(detail)")
-                }
+        PuniInvites.shared.signIn { [weak self] ok, detail in
+            guard let self, self.phase == .searching else { return }
+            if ok {
+                self.showMatchmaker()
+            } else {
+                self.phase = .failed("Game Center にサインインできませんでした。iPhone の「設定」→「Game Center」でサインインしてください。\(detail)")
             }
         }
+    }
+
+    /// 友だちからの招待を受けたとき（招待のリンク・通知から）
+    func accept(_ invite: GKInvite) {
+        if isActive { leave() }
+        reset()
+        phase = .searching
+        guard let controller = GKMatchmakerViewController(invite: invite) else {
+            phase = .failed("招待を開けませんでした")
+            return
+        }
+        controller.matchmakerDelegate = self
+        Self.present(controller)
     }
 
     func leave() {
@@ -215,7 +218,7 @@ final class PuniVersus: NSObject, ObservableObject {
 
     // MARK: - 画面を出す
 
-    private static func present(_ controller: UIViewController) {
+    static func present(_ controller: UIViewController) {
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }) ?? UIApplication.shared.connectedScenes
@@ -264,5 +267,75 @@ extension PuniVersus: GKMatchDelegate {
 
     nonisolated func match(_ match: GKMatch, didFailWithError error: Error?) {
         Task { @MainActor in self.opponentLeft() }
+    }
+}
+
+/// Game Center のサインインと、友だちからの招待の受け取り（アプリの起動時から待つ）。
+/// 招待を受けると、ぷにぷにシューターの画面を開いて対戦に入る
+@MainActor
+final class PuniInvites: NSObject, ObservableObject, GKLocalPlayerListener {
+    static let shared = PuniInvites()
+
+    /// 受けた招待（ぷにぷにシューターの画面が受け取って対戦に入る）
+    @Published var pendingInvite: GKInvite?
+    /// ぷにぷにシューターの画面を開いてほしいとき
+    @Published var openPuni = false
+    /// ぷにぷにシューターの画面が出ているか
+    var puniVisible = false
+
+    private var loginController: UIViewController?
+    private var registered = false
+    private var waiting: [(Bool, String) -> Void] = []
+    private var started = false
+
+    /// アプリの起動時に呼ぶ。サインインの画面は出さず（対戦を始めるときに出す）、サインイン済みなら招待を待つ
+    func start() {
+        guard !started else { return }
+        started = true
+        GKLocalPlayer.local.authenticateHandler = { [weak self] controller, error in
+            Task { @MainActor in
+                guard let self else { return }
+                if let controller {
+                    self.loginController = controller
+                    // 対戦を始めようとしているときだけ、サインインの画面を出す
+                    if !self.waiting.isEmpty { PuniVersus.present(controller) }
+                } else if GKLocalPlayer.local.isAuthenticated {
+                    self.loginController = nil
+                    if !self.registered {
+                        self.registered = true
+                        GKLocalPlayer.local.register(self)
+                    }
+                    self.finish(true, "")
+                } else {
+                    self.finish(false, error?.localizedDescription ?? "")
+                }
+            }
+        }
+    }
+
+    /// サインインする（済んでいればすぐ）。done はメインで呼ぶ
+    func signIn(_ done: @escaping (Bool, String) -> Void) {
+        start()
+        if GKLocalPlayer.local.isAuthenticated {
+            done(true, "")
+            return
+        }
+        waiting.append(done)
+        if let loginController {
+            PuniVersus.present(loginController)
+        }
+    }
+
+    private func finish(_ ok: Bool, _ detail: String) {
+        let list = waiting
+        waiting = []
+        for done in list { done(ok, detail) }
+    }
+
+    nonisolated func player(_ player: GKPlayer, didAccept invite: GKInvite) {
+        Task { @MainActor in
+            self.pendingInvite = invite
+            if !self.puniVisible { self.openPuni = true }
+        }
     }
 }

@@ -8,6 +8,8 @@ struct RootView: View {
     @State private var showingCamera = false
     @State private var showingGames = false
     @State private var showingSplash = true
+    @State private var showingPuni = false
+    @ObservedObject private var invites = PuniInvites.shared
 
     var body: some View {
         ZStack {
@@ -23,6 +25,19 @@ struct RootView: View {
         .preferredColorScheme(.light)
         .fullScreenCover(isPresented: $showingGames) {
             GameHubView(initialImage: camera.lastPhoto)
+        }
+        // Game Center の対戦の招待を受けたとき：ぷにぷにシューターを直接開く
+        .fullScreenCover(isPresented: $showingPuni) {
+            PuniGameView()
+        }
+        .onChange(of: invites.openPuni) { _, open in
+            guard open else { return }
+            invites.openPuni = false
+            guard !invites.puniVisible else { return }
+            let delay = showingCamera || showingGames ? 0.7 : 0
+            showingCamera = false
+            showingGames = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { showingPuni = true }
         }
         .fullScreenCover(isPresented: $showingCamera) {
             ContentView(camera: camera)

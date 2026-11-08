@@ -19,6 +19,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         AlbumNotifier.shared.start()
+        // ぷにぷにシューターの Game Center 対戦の招待を、起動したときから受け取れるように
+        PuniInvites.shared.start()
         return true
     }
 

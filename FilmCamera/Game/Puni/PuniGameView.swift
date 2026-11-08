@@ -7,6 +7,7 @@ struct PuniGameView: View {
     @StateObject private var game = PuniGame()
     /// オンライン対戦（Game Center）
     @StateObject private var versus = PuniVersus()
+    @ObservedObject private var invites = PuniInvites.shared
     /// 選んだ列の玉と、指の場所（容器の中の座標）
     @State private var picked: Int?
     @State private var finger: CGPoint?
@@ -177,12 +178,16 @@ struct PuniGameView: View {
             ticker.start()
             self.ticker = ticker
             game.begin()
+            invites.puniVisible = true
+            takeInvite()
         }
+        .onChange(of: invites.pendingInvite) { _, _ in takeInvite() }
         .onDisappear {
             ticker?.stop()
             ticker = nil
             versus.leave()
             game.end()
+            invites.puniVisible = false
         }
     }
 
@@ -229,6 +234,13 @@ struct PuniGameView: View {
     }
 
     // MARK: - オンライン対戦
+
+    /// 友だちからの招待があれば、その対戦に入る
+    private func takeInvite() {
+        guard let invite = invites.pendingInvite else { return }
+        invites.pendingInvite = nil
+        versus.accept(invite)
+    }
 
     /// 容器の右上に相手の容器を小さく、左上に来ているおじゃま玉の数
     @ViewBuilder
