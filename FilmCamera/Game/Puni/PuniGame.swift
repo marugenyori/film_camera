@@ -23,7 +23,7 @@ final class PuniGame: ObservableObject {
         /// くっついて生まれた直後の白い光（1 → 0）
         var flash: Double = 0
         /// 見た目だけのぷるぷる（ぶつかったり、くっついたりすると大きくなり、すぐおさまる）。
-        /// 大きさ（0〜0.25）・のびる向き・揺れはじめてからの時間
+        /// 大きさ（0〜0.45）・のびる向き・揺れはじめてからの時間
         var wobble: Float = 0
         var wobbleAngle: Float = 0
         var wobbleTime: Float = 0
@@ -421,10 +421,10 @@ final class PuniGame: ObservableObject {
                 let velocity = (center - last) / dt
                 let change = velocity - blobs[index].lastVelocity
                 let hit = simd_length(change)
-                if hit > width * 0.9 {
-                    let kick = min(hit / (width * 10), 0.2)
+                if hit > width * 0.5 {
+                    let kick = min(hit / (width * 4), 0.4)
                     if kick > blobs[index].wobble * 0.6 {
-                        blobs[index].wobble = min(0.25, max(blobs[index].wobble, kick))
+                        blobs[index].wobble = min(0.45, max(blobs[index].wobble, kick))
                         blobs[index].wobbleAngle = atan2(change.y, change.x)
                         blobs[index].wobbleTime = 0
                     }
@@ -433,7 +433,7 @@ final class PuniGame: ObservableObject {
             }
             blobs[index].lastCenter = center
             blobs[index].wobbleTime += dt
-            blobs[index].wobble *= exp(-dt * 2.6)
+            blobs[index].wobble *= exp(-dt * 1.4)
         }
     }
 
@@ -441,10 +441,13 @@ final class PuniGame: ObservableObject {
     func drawnPoints(_ blob: Blob, time: Double) -> [Vec] {
         let center = blob.center
         let axis = Vec(cos(blob.wobbleAngle), sin(blob.wobbleAngle))
-        // 1 秒に 4.5 回ゆれる
-        let swing = blob.wobble * sin(blob.wobbleTime * 2 * .pi * 4.5)
-        // 息をするような揺れ（玉ごとに少しずらす。列の玉は揺らさない）
-        let breath: Float = blob.queued ? 0 : 0.02 * sin(Float(time) * 2 * .pi * 1.1 + Float(blob.id) * 1.7)
+        // 1 秒に 3.2 回、大きくゆれる
+        let swing = blob.wobble * sin(blob.wobbleTime * 2 * .pi * 3.2)
+        // ふちが波打つ揺れ（3 つの山が回る。ゼリーのような感じ）
+        let ripple = blob.wobble * 0.35 * sin(blob.wobbleTime * 2 * .pi * 5.1)
+        let spin = blob.wobbleTime * 2.5 + Float(blob.id)
+        // 息をするような揺れ（玉ごとに少しずらす。列の玉は小さく）
+        let breath: Float = (blob.queued ? 0.025 : 0.06) * sin(Float(time) * 2 * .pi * 1.1 + Float(blob.id) * 1.7)
         let up = Vec(0, 1)
         return blob.pos.map { p in
             var d = p - center
@@ -457,6 +460,10 @@ final class PuniGame: ObservableObject {
                 let vertical = simd_dot(d, up)
                 let side = d - up * vertical
                 d = up * (vertical * (1 - breath)) + side * (1 + breath)
+            }
+            if ripple != 0 {
+                let angle = atan2(d.y, d.x)
+                d *= 1 + ripple * cos(angle * 3 + spin)
             }
             return center + d
         }
@@ -763,7 +770,7 @@ final class PuniGame: ObservableObject {
             blob.age = 0.05
             blob.flash = 1
             // くっついた玉は大きくぷるん
-            blob.wobble = 0.22
+            blob.wobble = 0.42
             blob.wobbleAngle = .pi / 2
             // 列の玉にぶつけてくっついたら、そのまま列（筒）の中に残る
             blob.queued = inTube
