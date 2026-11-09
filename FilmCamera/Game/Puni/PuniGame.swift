@@ -422,9 +422,9 @@ final class PuniGame: ObservableObject {
                 let change = velocity - blobs[index].lastVelocity
                 let hit = simd_length(change)
                 if hit > width * 0.5 {
-                    let kick = min(hit / (width * 4), 0.4)
+                    let kick = min(hit / (width * 10), 0.12)
                     if kick > blobs[index].wobble * 0.6 {
-                        blobs[index].wobble = min(0.45, max(blobs[index].wobble, kick))
+                        blobs[index].wobble = min(0.12, max(blobs[index].wobble, kick))
                         blobs[index].wobbleAngle = atan2(change.y, change.x)
                         blobs[index].wobbleTime = 0
                     }
@@ -444,10 +444,11 @@ final class PuniGame: ObservableObject {
         // 1 秒に 3.2 回、大きくゆれる
         let swing = blob.wobble * sin(blob.wobbleTime * 2 * .pi * 3.2)
         // ふちが波打つ揺れ（3 つの山が回る。ゼリーのような感じ）
-        let ripple = blob.wobble * 0.35 * sin(blob.wobbleTime * 2 * .pi * 5.1)
+        let ripple: Float = 0
         let spin = blob.wobbleTime * 2.5 + Float(blob.id)
         // 息をするような揺れ（玉ごとに少しずらす。列の玉は小さく）
-        let breath: Float = (blob.queued ? 0.025 : 0.06) * sin(Float(time) * 2 * .pi * 1.1 + Float(blob.id) * 1.7)
+        // 本家は止まっている玉は揺れないので、今は使わない
+        let breath: Float = 0
         let up = Vec(0, 1)
         return blob.pos.map { p in
             var d = p - center
@@ -530,7 +531,7 @@ final class PuniGame: ObservableObject {
         let queued = blobs[b].queued
         let edgeStiffness: Float = queued ? 0.25 : 0.003
         let skipStiffness: Float = queued ? 0.02 : 0.0002
-        let smoothing: Float = queued ? 0.1 : 0.01
+        let smoothing: Float = queued ? 0.1 : 0.003
         for i in 0..<count {
             let j = (i + 1) % count
             let delta = blobs[b].pos[j] - blobs[b].pos[i]
@@ -760,9 +761,11 @@ final class PuniGame: ObservableObject {
                     points.append(p)
                     previous.append(p)
                 } else {
-                    points.append(center + direction * start)
-                    // ぷるんと外へはずむ
-                    previous.append(center + direction * (start - width * 0.015))
+                    let p = center + direction * start
+                    points.append(p)
+                    // 本家のように、くっついた玉は縦にびよーんとのびてから横につぶれ、何度かはずんで落ち着く
+                    // （上下は外へ、左右は内へ動きはじめる）
+                    previous.append(p - Vec(-direction.x * 0.5, direction.y) * width * 0.003)
                 }
             }
             nextID += 1
@@ -770,8 +773,7 @@ final class PuniGame: ObservableObject {
             blob.age = 0.05
             blob.flash = 1
             // くっついた玉は大きくぷるん
-            blob.wobble = 0.42
-            blob.wobbleAngle = .pi / 2
+            blob.wobble = 0
             // 列の玉にぶつけてくっついたら、そのまま列（筒）の中に残る
             blob.queued = inTube
             // 点数：生まれた玉の数字
