@@ -22,6 +22,14 @@ final class PuniGame: ObservableObject {
         var age: Double = 0
         /// くっついて生まれた直後の白い光（1 → 0）
         var flash: Double = 0
+        /// 見た目だけのぷるぷる（ぶつかったり、くっついたりすると大きくなり、すぐおさまる）。
+        /// 大きさ（0〜0.25）・のびる向き・揺れはじめてからの時間
+        var wobble: Float = 0
+        var wobbleAngle: Float = 0
+        var wobbleTime: Float = 0
+        /// 前のコマの中心と速さ（急に速さが変わった＝ぶつかったのを見つける）
+        var lastCenter: Vec?
+        var lastVelocity = Vec(0, 0)
         /// 上の列（細い筒）の中にいる玉。重力ではなく筒の真ん中へ引かれ、押し合う
         var queued = false
         var minX: Float = 0, maxX: Float = 0, minY: Float = 0, maxY: Float = 0
@@ -358,6 +366,7 @@ final class PuniGame: ObservableObject {
         feedQueue(dt)
         checkDanger(dt)
         countScore(dt)
+        jiggle(Float(dt))
         for index in blobs.indices where blobs[index].flash > 0 {
             blobs[index].flash = max(0, blobs[index].flash - dt * 2.5)
         }
@@ -401,6 +410,56 @@ final class PuniGame: ObservableObject {
             for b in blobs.indices { walls(b) }
         }
         if !touching.isEmpty { merge(touching) }
+    }
+
+    /// 見た目のぷるぷる：中心の速さが急に変わった（ぶつかった・着地した）ら、その向きにつぶれて揺れる
+    private func jiggle(_ dt: Float) {
+        guard dt > 0 else { return }
+        for index in blobs.indices {
+            let center = blobs[index].center
+            if let last = blobs[index].lastCenter {
+                let velocity = (center - last) / dt
+                let change = velocity - blobs[index].lastVelocity
+                let hit = simd_length(change)
+                if hit > width * 0.9 {
+                    let kick = min(hit / (width * 10), 0.2)
+                    if kick > blobs[index].wobble * 0.6 {
+                        blobs[index].wobble = min(0.25, max(blobs[index].wobble, kick))
+                        blobs[index].wobbleAngle = atan2(change.y, change.x)
+                        blobs[index].wobbleTime = 0
+                    }
+                }
+                blobs[index].lastVelocity = velocity
+            }
+            blobs[index].lastCenter = center
+            blobs[index].wobbleTime += dt
+            blobs[index].wobble *= exp(-dt * 2.6)
+        }
+    }
+
+    /// 描くときのふちの点：ぷるぷる（揺れる向きにのびちぢみ）と、止まっていてもゆっくり息をするような小さな揺れを足す
+    func drawnPoints(_ blob: Blob, time: Double) -> [Vec] {
+        let center = blob.center
+        let axis = Vec(cos(blob.wobbleAngle), sin(blob.wobbleAngle))
+        // 1 秒に 4.5 回ゆれる
+        let swing = blob.wobble * sin(blob.wobbleTime * 2 * .pi * 4.5)
+        // 息をするような揺れ（玉ごとに少しずらす。列の玉は揺らさない）
+        let breath: Float = blob.queued ? 0 : 0.02 * sin(Float(time) * 2 * .pi * 1.1 + Float(blob.id) * 1.7)
+        let up = Vec(0, 1)
+        return blob.pos.map { p in
+            var d = p - center
+            if swing != 0 {
+                let along = simd_dot(d, axis)
+                let side = d - axis * along
+                d = axis * (along * (1 - swing)) + side * (1 + swing * 0.85)
+            }
+            if breath != 0 {
+                let vertical = simd_dot(d, up)
+                let side = d - up * vertical
+                d = up * (vertical * (1 - breath)) + side * (1 + breath)
+            }
+            return center + d
+        }
     }
 
     /// ふちが自分自身と交わった玉（輪のようにねじれた玉）を、同じ面積のきれいな形に作り直す。
@@ -703,6 +762,9 @@ final class PuniGame: ObservableObject {
             var blob = Blob(id: nextID, level: level, pos: points, prev: previous, area: max(areaA, areaB), targetArea: area(level))
             blob.age = 0.05
             blob.flash = 1
+            // くっついた玉は大きくぷるん
+            blob.wobble = 0.22
+            blob.wobbleAngle = .pi / 2
             // 列の玉にぶつけてくっついたら、そのまま列（筒）の中に残る
             blob.queued = inTube
             // 点数：生まれた玉の数字

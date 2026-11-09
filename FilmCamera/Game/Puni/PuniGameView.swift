@@ -505,7 +505,7 @@ private struct PuniBoard: View {
     }
 
     private func drawBlob(_ context: inout GraphicsContext, _ blob: PuniGame.Blob) {
-        let points = blob.pos.map(point)
+        let points = game.drawnPoints(blob, time: Date.timeIntervalSinceReferenceDate).map(point)
         let count = points.count
         guard count > 2 else { return }
         // 点のあいだを少しなめらかにつなぐ
