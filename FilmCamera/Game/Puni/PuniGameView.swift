@@ -179,6 +179,7 @@ struct PuniGameView: View {
             self.ticker = ticker
             game.begin()
             invites.puniVisible = true
+            PuniInvites.shared.start()
             takeInvite()
         }
         .onChange(of: invites.pendingInvite) { _, _ in takeInvite() }

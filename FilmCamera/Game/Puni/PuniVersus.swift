@@ -315,7 +315,8 @@ final class PuniInvites: NSObject, ObservableObject, GKLocalPlayerListener {
     private var waiting: [(Bool, String) -> Void] = []
     private var started = false
 
-    /// アプリの起動時に呼ぶ。サインインの画面は出さず（対戦を始めるときに出す）、サインイン済みなら招待を待つ
+    /// ゲームの画面を開いたときに呼ぶ（起動時に呼ぶと、カメラの最中に Game Center の知らせが出て固まった）。
+    /// サインインの画面は出さず（対戦を始めるときに出す）、サインイン済みなら招待を待つ
     func start() {
         guard !started else { return }
         started = true

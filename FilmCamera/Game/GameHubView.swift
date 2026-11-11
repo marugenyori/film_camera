@@ -43,6 +43,9 @@ struct GameHubView: View {
             }
         }
         .preferredColorScheme(.dark)
+        // Game Center のサインイン（「おかえりなさい」の知らせ）と対戦の招待の受け取りは、ゲームの画面を開いてから始める。
+        // 起動したときに始めると、カメラを使っている最中に知らせが出て、カメラが固まった
+        .onAppear { PuniInvites.shared.start() }
         .fullScreenCover(item: $playing) { game in
             switch game {
             case .jewel: JewelGameView(initialImage: initialImage)
