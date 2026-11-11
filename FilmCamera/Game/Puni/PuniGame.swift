@@ -393,9 +393,31 @@ final class PuniGame: ObservableObject {
                 }
                 continue
             }
-            for i in blobs[b].pos.indices {
+            // のびちぢみ（形の揺れ）だけを弱める。落ちる・転がる動きはそのまま。
+            // 弱めないと、くっついた玉や着地した玉がいつまでも跳ね続けた
+            let count = blobs[b].pos.count
+            var velocities = [Vec](repeating: Vec(0, 0), count: count)
+            var mean = Vec(0, 0)
+            for i in 0..<count {
+                velocities[i] = (blobs[b].pos[i] - blobs[b].prev[i]) * 0.999
+                mean += velocities[i]
+            }
+            mean /= Float(count)
+            let center = blobs[b].center
+            var spin: Float = 0, spread: Float = 0
+            for i in 0..<count {
+                let r = blobs[b].pos[i] - center
+                let v = velocities[i] - mean
+                spin += r.x * v.y - r.y * v.x
+                spread += simd_length_squared(r)
+            }
+            let omega = spread > 0.0001 ? spin / spread : 0
+            for i in 0..<count {
+                let r = blobs[b].pos[i] - center
+                let turning = Vec(-r.y * omega, r.x * omega)
+                let wobble = velocities[i] - mean - turning
+                let velocity = mean + turning + wobble * (1 - 0.03)
                 let p = blobs[b].pos[i]
-                let velocity = (p - blobs[b].prev[i]) * 0.999
                 blobs[b].prev[i] = p
                 blobs[b].pos[i] = p + velocity + gravity
             }
@@ -765,7 +787,7 @@ final class PuniGame: ObservableObject {
                     points.append(p)
                     // 本家のように、くっついた玉は縦にびよーんとのびてから横につぶれ、何度かはずんで落ち着く
                     // （上下は外へ、左右は内へ動きはじめる）
-                    previous.append(p - Vec(-direction.x * 0.5, direction.y) * width * 0.003)
+                    previous.append(p - Vec(-direction.x * 0.5, direction.y) * width * 0.004)
                 }
             }
             nextID += 1
