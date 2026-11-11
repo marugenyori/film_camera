@@ -416,7 +416,7 @@ final class PuniGame: ObservableObject {
                 let r = blobs[b].pos[i] - center
                 let turning = Vec(-r.y * omega, r.x * omega)
                 let wobble = velocities[i] - mean - turning
-                let velocity = mean + turning + wobble * (1 - 0.06)
+                let velocity = mean + turning + wobble * (1 - 0.2)
                 let p = blobs[b].pos[i]
                 blobs[b].prev[i] = p
                 blobs[b].pos[i] = p + velocity + gravity
@@ -444,7 +444,8 @@ final class PuniGame: ObservableObject {
                 let change = velocity - blobs[index].lastVelocity
                 let hit = simd_length(change)
                 if hit > width * 0.5 {
-                    let kick = min(hit / (width * 10), 0.12)
+                    // 本家は跳ねないので、見た目の揺れはつけない
+                    let kick: Float = 0
                     if kick > blobs[index].wobble * 0.6 {
                         blobs[index].wobble = min(0.12, max(blobs[index].wobble, kick))
                         blobs[index].wobbleAngle = atan2(change.y, change.x)
@@ -686,7 +687,7 @@ final class PuniGame: ObservableObject {
             blobs[a].pos[i] += move * 0.5
             // 押されている点は少しすべりにくく（止まったあとにぷるぷる震え続けないように）
             let previous = blobs[a].prev[i]
-            blobs[a].prev[i] = previous + (blobs[a].pos[i] - previous) * 0.15
+            blobs[a].prev[i] = previous + (blobs[a].pos[i] - previous) * 0.3
             let next = (bestEdge + 1) % countB
             blobs[b].pos[bestEdge] -= move * 0.5 * (1 - bestT)
             blobs[b].pos[next] -= move * 0.5 * bestT
@@ -745,7 +746,7 @@ final class PuniGame: ObservableObject {
             if touched {
                 // さわっているところは横の動きを少しおさえる
                 let previous = blobs[b].prev[i]
-                blobs[b].prev[i] = previous + (p - previous) * 0.2
+                blobs[b].prev[i] = previous + (p - previous) * 0.3
             }
             blobs[b].pos[i] = p
         }
@@ -787,7 +788,7 @@ final class PuniGame: ObservableObject {
                     points.append(p)
                     // 本家のように、くっついた玉は縦にびよーんとのびてから横につぶれ、何度かはずんで落ち着く
                     // （上下は外へ、左右は内へ動きはじめる）
-                    previous.append(p - Vec(-direction.x * 0.5, direction.y) * width * 0.0025)
+                    previous.append(p)
                 }
             }
             nextID += 1
