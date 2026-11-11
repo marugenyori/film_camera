@@ -38,6 +38,10 @@ struct ContentView: View {
                             .disabled(camera.isRecording)
                         }
                         if !camera.isDual {
+                            // 2 倍まではワンタップで（iPhone のカメラと同じ丸いボタン）
+                            ZoomQuickButtons(zoom: camera.zoom,
+                                             presets: zoomPresets.filter { $0 <= 2 },
+                                             onPreset: { camera.zoom(to: $0) })
                             ZoomRuler(zoom: camera.zoom,
                                       range: camera.zoomRange,
                                       presets: zoomPresets,
@@ -777,6 +781,37 @@ private struct ZoomRuler: View {
         return rounded == rounded.rounded() && rounded >= 1
             ? String(format: "%.0f", rounded)
             : String(format: "%.1f", rounded)
+    }
+}
+
+/// 0.5・1・2 倍に、ワンタップで切り替える丸いボタン。いまの倍率にいちばん近いボタンを光らせ、その倍率を出す
+private struct ZoomQuickButtons: View {
+    let zoom: CGFloat
+    let presets: [CGFloat]
+    let onPreset: (CGFloat) -> Void
+
+    var body: some View {
+        let nearest = presets.min { abs(log2($0) - log2(zoom)) < abs(log2($1) - log2(zoom)) }
+        HStack(spacing: 10) {
+            ForEach(presets, id: \.self) { preset in
+                let selected = preset == nearest
+                Button {
+                    onPreset(preset)
+                } label: {
+                    Text(selected ? ZoomRuler.label(zoom) + "×" : ZoomRuler.label(preset))
+                        .font(.caption.weight(.bold).monospacedDigit())
+                        .foregroundStyle(selected ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.white.opacity(0.85)))
+                        .frame(width: selected ? 44 : 36, height: selected ? 44 : 36)
+                        .background(Circle().fill(Color.black.opacity(0.5)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(ZoomRuler.label(preset))倍")
+            }
+        }
+        .padding(6)
+        .background(Capsule().fill(Color.black.opacity(0.25)))
+        .animation(.snappy(duration: 0.2), value: nearest)
     }
 }
 

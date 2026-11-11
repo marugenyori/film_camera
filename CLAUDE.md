@@ -21,7 +21,7 @@
 | `FilmCamera/Views/CameraPreview.swift` | MTKView（Metal）で、フィルタをかけた映像を毎秒30コマ描く |
 | `FilmCamera/Camera/DualCameraSession.swift` | 外カメラと内カメラを同時に動かす（`AVCaptureMultiCamSession`）。「前後同時」をオンにしている間だけ使う |
 | `FilmCamera/Camera/VideoRecorder.swift` | フィルタをかけた映像と音声を HEVC の動画に書き出す |
-| `FilmCamera/Views/ContentView.swift` | 画面。持ち主の希望で **teenage engineering 風**：アルミ色の筐体（`Panel`）。**プレビューはできるだけ大きく**（画面幅いっぱい）。上の段にランプつき機能キー（日付・ライト・グリッド・前後同時・切り替え。**文字ではなくアイコンだけ**）と黒い小窓の状態表示。下の段に**横スライドで選ぶモード**（`ModeSlider`、日本語の名前だけ。モードごとのアイコン・キー・色見本は「いらない」と言われて外した）、黒縁の大きな丸いシャッター、最後の写真、写真／ビデオのスライドスイッチ（アイコン）。差し色はオレンジ（AccentColor、`.tint`）。プレビュー上には流れる目盛りのズーム（なぞる／数字／W・T） |
+| `FilmCamera/Views/ContentView.swift` | 画面。持ち主の希望で **teenage engineering 風**：アルミ色の筐体（`Panel`）。**プレビューはできるだけ大きく**（画面幅いっぱい）。上の段にランプつき機能キー（日付・ライト・グリッド・前後同時・切り替え。**文字ではなくアイコンだけ**）と黒い小窓の状態表示。下の段に**横スライドで選ぶモード**（`ModeSlider`、日本語の名前だけ。モードごとのアイコン・キー・色見本は「いらない」と言われて外した）、黒縁の大きな丸いシャッター、最後の写真、写真／ビデオのスライドスイッチ（アイコン）。差し色はオレンジ（AccentColor、`.tint`）。プレビュー上には流れる目盛りのズーム（なぞる／数字／W・T）。その上に、2 倍までをワンタップで切り替える丸いボタン（`ZoomQuickButtons`：0.5（使える機種だけ）・1・2。いまの倍率にいちばん近いボタンが大きく光り、倍率を出す） |
 | `FilmCamera.xcodeproj/` | Xcode プロジェクト（フォルダ同期方式。`FilmCamera/` にファイルを置くだけでビルド対象になる） |
 | `.github/workflows/ios-build.yml` | ビルド確認と TestFlight 配信 |
 
