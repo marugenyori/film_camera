@@ -283,6 +283,9 @@ final class CameraModel: NSObject, ObservableObject {
         NotificationCenter.default.addObserver(self, selector: #selector(sessionWasInterrupted(_:)),
                                                name: .AVCaptureSessionWasInterrupted,
                                                object: session)
+        NotificationCenter.default.addObserver(self, selector: #selector(sessionInterruptionEnded(_:)),
+                                               name: .AVCaptureSessionInterruptionEnded,
+                                               object: session)
         dual.onFrame = { [weak self] frame, isBack in
             guard let self else { return }
             self.frameLock.lock()
@@ -514,6 +517,14 @@ final class CameraModel: NSObject, ObservableObject {
         default: reason = raw.map { "\($0)" } ?? "不明"
         }
         sessionQueue.async { self.lastInterruption = reason }
+    }
+
+    /// 中断が終わったとき（ほかのアプリや知らせの画面が閉じたとき）、止まっていれば動かし直す
+    @objc private func sessionInterruptionEnded(_ note: Notification) {
+        sessionQueue.async {
+            self.lastInterruption = nil
+            if self.isConfigured && !self.session.isRunning && !self.isDual { self.session.startRunning() }
+        }
     }
 
     /// セッションのエラーを記録し、止まっていれば動かし直す
